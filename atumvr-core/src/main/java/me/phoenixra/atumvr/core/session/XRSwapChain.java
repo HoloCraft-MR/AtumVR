@@ -3,6 +3,7 @@ package me.phoenixra.atumvr.core.session;
 import lombok.Getter;
 import me.phoenixra.atumvr.core.XRProvider;
 import me.phoenixra.atumvr.core.enums.XRGraphicsApi;
+import me.phoenixra.atumvr.core.session.platform.XRPlatform;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.openxr.*;
@@ -182,12 +183,7 @@ public class XRSwapChain {
 
 
     public XrSwapchainImageOpenGLKHR.Buffer createImageBuffers(int imageCount, MemoryStack stack) {
-        var swapchainImageBuffer = XrSwapchainImageOpenGLKHR.calloc(imageCount, stack);
-        for (XrSwapchainImageOpenGLKHR image : swapchainImageBuffer) {
-            image.type(KHROpenGLEnable.XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR);
-        }
-
-        return swapchainImageBuffer;
+        return XRPlatform.get().createImageBuffers(imageCount, stack);
     }
 
 

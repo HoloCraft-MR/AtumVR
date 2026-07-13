@@ -4,6 +4,7 @@ import lombok.Getter;
 import me.phoenixra.atumvr.api.exceptions.AtumVRException;
 import me.phoenixra.atumvr.core.XRProvider;
 import me.phoenixra.atumvr.core.enums.XRGraphicsApi;
+import me.phoenixra.atumvr.core.session.platform.XRPlatform;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.GL;
@@ -62,6 +63,8 @@ public class XRInstance {
     public void init() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
 
+            XRPlatform.get().initializeLoader(stack);
+
             var extensionsPointer = setupExtensions(
                     vrProvider, stack
             );
@@ -77,7 +80,7 @@ public class XRInstance {
             // 2) Create XrInstanceCreateInfo
             var instInfo = XrInstanceCreateInfo.calloc(stack)
                     .type(XR10.XR_TYPE_INSTANCE_CREATE_INFO)
-                    .next(0)
+                    .next(XRPlatform.get().getInstanceCreateInfo(stack))
                     .applicationInfo(appInfo)
                     .enabledExtensionNames(extensionsPointer)
                     .enabledApiLayerNames(null);
