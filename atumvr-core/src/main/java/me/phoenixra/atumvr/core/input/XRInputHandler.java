@@ -858,6 +858,9 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
         if(instance.getHandle().getCapabilities().XR_HTCX_vive_tracker_interaction){
             list.add(VIVE_TRACKER);
         }
+        if(instance.isExtensionEnabled(SteamFrameXRProfile.EXTENSION_NAME)){
+            list.add(STEAM_FRAME);
+        }
 
         return list;
     }
@@ -879,6 +882,8 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
         if(supported.contains(VIVE)) out.add(new ViveXRProfile(vrProvider));
 
         if(supported.contains(VIVE_COSMOS)) out.add(new ViveCosmosXRProfile(vrProvider));
+
+        if(supported.contains(STEAM_FRAME)) out.add(new SteamFrameXRProfile(vrProvider));
 
         return out;
     }

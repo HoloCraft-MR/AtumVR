@@ -25,6 +25,8 @@ public enum VRInteractionProfileType {
 
     WINDOWS_MOTION("/interaction_profiles/microsoft/motion_controller", Kind.CONTROLLER),
 
+    STEAM_FRAME("/interaction_profiles/valve/frame_controller_valve", Kind.CONTROLLER),
+
     VIVE_TRACKER("/interaction_profiles/htc/vive_tracker_htcx", Kind.TRACKER);
 
 
@@ -116,6 +118,8 @@ public enum VRInteractionProfileType {
 
             case WINDOWS_MOTION -> WindowsMotionProfile.ALL_ACTION_IDS;
 
+            case STEAM_FRAME -> SteamFrameProfile.ALL_ACTION_IDS;
+
             case VIVE_TRACKER ->  List.of();
         };
     }
@@ -140,6 +144,8 @@ public enum VRInteractionProfileType {
 
             case WINDOWS_MOTION -> WindowsMotionProfile.BUTTON_IDS;
 
+            case STEAM_FRAME -> SteamFrameProfile.BUTTON_IDS;
+
             case VIVE_TRACKER ->  List.of();
         };
     }
@@ -163,6 +169,8 @@ public enum VRInteractionProfileType {
             case VIVE -> ViveProfile.VEC2_IDS;
 
             case WINDOWS_MOTION -> WindowsMotionProfile.VEC2_IDS;
+
+            case STEAM_FRAME -> SteamFrameProfile.VEC2_IDS;
 
             case VIVE_TRACKER ->  List.of();
         };

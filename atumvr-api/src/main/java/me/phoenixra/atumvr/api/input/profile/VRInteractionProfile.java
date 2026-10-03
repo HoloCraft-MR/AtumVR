@@ -26,6 +26,7 @@ import java.util.Collection;
  * @see ViveProfile
  * @see ViveCosmosProfile
  * @see WindowsMotionProfile
+ * @see SteamFrameProfile
  */
 public interface VRInteractionProfile extends AtumVRActionSet {
 
