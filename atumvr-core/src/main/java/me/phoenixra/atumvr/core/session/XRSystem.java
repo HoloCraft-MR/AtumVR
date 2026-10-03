@@ -138,6 +138,9 @@ public class XRSystem {
 
                 glXContext = GLFWNativeGLX.glfwGetGLXContext(windowHandle);
                 glXWindowHandle = GLFWNativeGLX.glfwGetGLXWindow(windowHandle);
+                if (xDisplay == NULL || glXContext == NULL) {
+                    throw new AtumVRException("No GLX context (Wayland/EGL?), use the Vulkan graphics API or X11");
+                }
 
                 fbXID = glXQueryDrawable(xDisplay, glXWindowHandle, GLX_FBCONFIG_ID);
             } else {
@@ -145,7 +148,7 @@ public class XRSystem {
                 glXContext = GLX.glXGetCurrentContext();
                 glXWindowHandle = GLX.glXGetCurrentDrawable();
                 if (xDisplay == NULL || glXContext == NULL) {
-                    throw new AtumVRException("No GLX context");
+                    throw new AtumVRException("No GLX context (Wayland/EGL?), use the Vulkan graphics API or X11");
                 }
 
                 IntBuffer fbConfigId = stack.mallocInt(1);

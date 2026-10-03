@@ -8,8 +8,10 @@ import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GLX;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.Platform;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -18,6 +20,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+
+import static org.lwjgl.system.MemoryUtil.NULL;
 
 /**
  * XR session instance (low-level OpenXR stuff)
@@ -206,6 +210,19 @@ public class XRInstance {
                                 + XRGraphicsApi.VULKAN.getExtensionName() + ", staying on OpenGL"
                 );
             }
+            // on Linux XR_KHR_opengl_enable binds only GLX, GLFW and SDL on Wayland run EGL
+            if (isNonGlxContext()) {
+                if (vulkanSupported) {
+                    vrProvider.getLogger().logInfo(
+                            "OpenGL context is not GLX (Wayland/EGL), using the Vulkan bridge"
+                    );
+                    return XRGraphicsApi.VULKAN;
+                }
+                vrProvider.getLogger().logWarn(
+                        "OpenGL context is not GLX (Wayland/EGL) and the runtime lacks "
+                                + XRGraphicsApi.VULKAN.getExtensionName() + ", OpenGL session will likely fail"
+                );
+            }
             return XRGraphicsApi.OPENGL;
         }
         if (vulkanSupported) {
@@ -239,6 +256,22 @@ public class XRInstance {
         }
         String lower = renderer.toLowerCase(Locale.ROOT);
         return lower.contains("intel") && lower.contains("arc") ? renderer : null;
+    }
+
+    private boolean isNonGlxContext() {
+        if (Platform.get() != Platform.LINUX) {
+            return false;
+        }
+        try {
+            GL.getCapabilities();
+        } catch (IllegalStateException noContext) {
+            return false;
+        }
+        try {
+            return GLX.glXGetCurrentContext() == NULL;
+        } catch (Throwable noGlx) {
+            return true;
+        }
     }
 
     public boolean isExtensionEnabled(@NotNull String extensionName){

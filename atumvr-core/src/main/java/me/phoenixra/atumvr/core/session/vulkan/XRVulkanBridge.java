@@ -6,8 +6,10 @@ import me.phoenixra.atumvr.core.XRProvider;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.EXTMemoryObject;
+import org.lwjgl.opengl.EXTMemoryObjectFD;
 import org.lwjgl.opengl.EXTMemoryObjectWin32;
 import org.lwjgl.opengl.EXTSemaphore;
+import org.lwjgl.opengl.EXTSemaphoreFD;
 import org.lwjgl.opengl.EXTSemaphoreWin32;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
@@ -27,7 +29,9 @@ import org.lwjgl.openxr.XrGraphicsBindingVulkan2KHR;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.Platform;
 import org.lwjgl.system.Struct;
+import org.lwjgl.vulkan.KHRExternalMemoryFd;
 import org.lwjgl.vulkan.KHRExternalMemoryWin32;
+import org.lwjgl.vulkan.KHRExternalSemaphoreFd;
 import org.lwjgl.vulkan.KHRExternalSemaphoreWin32;
 import org.lwjgl.vulkan.VK;
 import org.lwjgl.vulkan.VkApplicationInfo;
@@ -54,21 +58,28 @@ import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryDedicatedAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryDedicatedRequirements;
+import org.lwjgl.vulkan.VkMemoryGetFdInfoKHR;
 import org.lwjgl.vulkan.VkMemoryGetWin32HandleInfoKHR;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkMemoryRequirements2;
 import org.lwjgl.vulkan.VkPhysicalDevice;
+import org.lwjgl.vulkan.VkPhysicalDeviceIDProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
+import org.lwjgl.vulkan.VkSemaphoreGetFdInfoKHR;
 import org.lwjgl.vulkan.VkSemaphoreGetWin32HandleInfoKHR;
 import org.lwjgl.vulkan.VkSubmitInfo;
 
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.system.MemoryUtil.memAddress;
@@ -76,17 +87,44 @@ import static org.lwjgl.system.MemoryUtil.memAllocInt;
 import static org.lwjgl.system.MemoryUtil.memCopy;
 import static org.lwjgl.system.MemoryUtil.memFree;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK11.VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 import static org.lwjgl.vulkan.VK11.VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+import static org.lwjgl.vulkan.VK11.VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
 import static org.lwjgl.vulkan.VK11.VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 import static org.lwjgl.vulkan.VK11.vkGetImageMemoryRequirements2;
+import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceProperties2;
 
 
 public class XRVulkanBridge {
 
     private static final int RING_SIZE = 2;
     private static final long GPU_TIMEOUT_NS = 1_000_000_000L;
+    private static final boolean FORCE_CPU_STAGING = Boolean.getBoolean("atumvr.vulkanBridge.forceCpuStaging");
 
     private enum Tier { ZERO_COPY, CPU_STAGING }
+
+    private enum Interop {
+        WIN32(KHRExternalMemoryWin32.VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+                KHRExternalSemaphoreWin32.VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT),
+        OPAQUE_FD(KHRExternalMemoryFd.VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+                KHRExternalSemaphoreFd.VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT);
+
+        private final String memoryExtension;
+        private final String semaphoreExtension;
+        private final int memoryHandleType;
+        private final int semaphoreHandleType;
+
+        Interop(String memoryExtension, String semaphoreExtension, int memoryHandleType, int semaphoreHandleType) {
+            this.memoryExtension = memoryExtension;
+            this.semaphoreExtension = semaphoreExtension;
+            this.memoryHandleType = memoryHandleType;
+            this.semaphoreHandleType = semaphoreHandleType;
+        }
+    }
 
     private final XRProvider vrProvider;
 
@@ -97,7 +135,7 @@ public class XRVulkanBridge {
     private VkDevice device;
     private VkQueue queue;
     private int queueFamilyIndex = -1;
-    private boolean vkExternalSupported;
+    private Interop interop;
 
     private long commandPool;
     private final VkCommandBuffer[] ringCommandBuffers = new VkCommandBuffer[RING_SIZE];
@@ -192,7 +230,7 @@ public class XRVulkanBridge {
         physicalDevice = new VkPhysicalDevice(pointerBuf.get(0), vkInstance);
 
         queueFamilyIndex = findGraphicsQueueFamily(stack);
-        vkExternalSupported = Platform.get() == Platform.WINDOWS && hasWin32ExternalExtensions();
+        interop = resolveInterop();
 
         // VkDevice, created by the runtime itself
         var queueInfo = VkDeviceQueueCreateInfo.calloc(1, stack);
@@ -203,10 +241,10 @@ public class XRVulkanBridge {
         var deviceInfo = VkDeviceCreateInfo.calloc(stack)
                 .sType$Default()
                 .pQueueCreateInfos(queueInfo);
-        if (vkExternalSupported) {
+        if (interop != null) {
             deviceInfo.ppEnabledExtensionNames(stack.pointers(
-                    stack.UTF8(KHRExternalMemoryWin32.VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME),
-                    stack.UTF8(KHRExternalSemaphoreWin32.VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME)
+                    stack.UTF8(interop.memoryExtension),
+                    stack.UTF8(interop.semaphoreExtension)
             ));
         }
         var xrDeviceInfo = XrVulkanDeviceCreateInfoKHR.calloc(stack)
@@ -229,7 +267,7 @@ public class XRVulkanBridge {
 
         vrProvider.getLogger().logInfo(
                 "Vulkan bridge device ready (queue family " + queueFamilyIndex
-                        + ", win32 external interop " + (vkExternalSupported ? "available" : "unavailable") + ")"
+                        + ", external interop " + (interop != null ? interop : "unavailable") + ")"
         );
 
         return XrGraphicsBindingVulkan2KHR.calloc(stack)
@@ -295,9 +333,10 @@ public class XRVulkanBridge {
             this.height = height;
             this.eyeByteSize = (long) width * height * 4L;
             tier = decideTier();
-            if (tier == Tier.ZERO_COPY) {
-                createSharedSemaphores();
-            } else {
+            if (tier == Tier.ZERO_COPY && !createZeroCopyTargets()) {
+                tier = Tier.CPU_STAGING;
+            }
+            if (tier == Tier.CPU_STAGING) {
                 createStagingBuffer();
             }
         } else if (width != this.width || height != this.height) {
@@ -305,15 +344,10 @@ public class XRVulkanBridge {
                     + width + "x" + height + " vs " + this.width + "x" + this.height);
         }
 
-        int texture = tier == Tier.ZERO_COPY
-                ? createSharedEyeTexture(eyeIndex)
-                : createStagingEyeTexture(eyeIndex);
-        glTextures[eyeIndex] = texture;
-
-        if (eyeIndex == 1 && tier == Tier.ZERO_COPY) {
-            glSemTextures.put(0, glTextures[0]).put(1, glTextures[1]);
+        if (tier == Tier.CPU_STAGING) {
+            glTextures[eyeIndex] = createStagingEyeTexture(eyeIndex);
         }
-        return texture;
+        return glTextures[eyeIndex];
     }
 
 
@@ -348,6 +382,9 @@ public class XRVulkanBridge {
             int slot = ringCursor;
             VkCommandBuffer commandBuffer = beginRingCommandBuffer(slot, stack);
 
+            if (interop == Interop.OPAQUE_FD) {
+                recordSharedOwnershipBarriers(commandBuffer, stack, true);
+            }
             recordAcquireBarriers(commandBuffer, stack, leftImageIndex, rightImageIndex);
 
             // blit instead of copy: flips Y (GL bottom-up -> Vulkan top-down)
@@ -368,6 +405,9 @@ public class XRVulkanBridge {
                     swapchainImages[1][rightImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     region, VK_FILTER_NEAREST);
 
+            if (interop == Interop.OPAQUE_FD) {
+                recordSharedOwnershipBarriers(commandBuffer, stack, false);
+            }
             recordReleaseBarriers(commandBuffer, stack, leftImageIndex, rightImageIndex);
             checkVk(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(bridge)");
 
@@ -515,7 +555,17 @@ public class XRVulkanBridge {
         throw new AtumVRException("Runtime-selected Vulkan device has no graphics queue");
     }
 
-    private boolean hasWin32ExternalExtensions() {
+    private Interop resolveInterop() {
+        Interop candidate = Platform.get() == Platform.WINDOWS ? Interop.WIN32
+                : Platform.get() == Platform.LINUX ? Interop.OPAQUE_FD
+                : null;
+        if (candidate == null || !hasDeviceExtensions(candidate.memoryExtension, candidate.semaphoreExtension)) {
+            return null;
+        }
+        return candidate;
+    }
+
+    private boolean hasDeviceExtensions(String... names) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             IntBuffer countBuf = stack.callocInt(1);
             checkVk(vkEnumerateDeviceExtensionProperties(physicalDevice, (String) null, countBuf, null),
@@ -524,13 +574,11 @@ public class XRVulkanBridge {
             try {
                 checkVk(vkEnumerateDeviceExtensionProperties(physicalDevice, (String) null, countBuf, props),
                         "vkEnumerateDeviceExtensionProperties list");
-                boolean memory = false, semaphore = false;
+                Set<String> available = new HashSet<>();
                 for (int i = 0; i < props.capacity(); i++) {
-                    String name = props.get(i).extensionNameString();
-                    memory |= KHRExternalMemoryWin32.VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME.equals(name);
-                    semaphore |= KHRExternalSemaphoreWin32.VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME.equals(name);
+                    available.add(props.get(i).extensionNameString());
                 }
-                return memory && semaphore;
+                return available.containsAll(List.of(names));
             } finally {
                 props.free();
             }
@@ -616,6 +664,24 @@ public class XRVulkanBridge {
                 0, null, null, barriers);
     }
 
+    // GL hands the shared images over through VK_QUEUE_FAMILY_EXTERNAL, Mesa drivers may keep them compressed
+    private void recordSharedOwnershipBarriers(VkCommandBuffer commandBuffer, MemoryStack stack, boolean acquire) {
+        var barriers = VkImageMemoryBarrier.calloc(2, stack);
+        for (int eye = 0; eye < 2; eye++) {
+            setImageBarrier(barriers.get(eye), sharedImages[eye],
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    acquire ? 0 : VK_ACCESS_TRANSFER_READ_BIT,
+                    acquire ? VK_ACCESS_TRANSFER_READ_BIT : 0);
+            barriers.get(eye)
+                    .srcQueueFamilyIndex(acquire ? VK_QUEUE_FAMILY_EXTERNAL : queueFamilyIndex)
+                    .dstQueueFamilyIndex(acquire ? queueFamilyIndex : VK_QUEUE_FAMILY_EXTERNAL);
+        }
+        vkCmdPipelineBarrier(commandBuffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                acquire ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                0, null, null, barriers);
+    }
+
     private void setImageBarrier(VkImageMemoryBarrier barrier, long image,
                                  int oldLayout, int newLayout,
                                  int srcAccess, int dstAccess) {
@@ -643,17 +709,83 @@ public class XRVulkanBridge {
         } catch (IllegalStateException e) {
             throw new AtumVRException("Vulkan bridge needs a current OpenGL context on this thread");
         }
-        boolean glExternal = caps.GL_EXT_memory_object && caps.GL_EXT_memory_object_win32
-                && caps.GL_EXT_semaphore && caps.GL_EXT_semaphore_win32;
-        Tier picked = (vkExternalSupported && glExternal) ? Tier.ZERO_COPY : Tier.CPU_STAGING;
+        boolean glExternal = caps.GL_EXT_memory_object && caps.GL_EXT_semaphore && (interop == Interop.WIN32
+                ? caps.GL_EXT_memory_object_win32 && caps.GL_EXT_semaphore_win32
+                : caps.GL_EXT_memory_object_fd && caps.GL_EXT_semaphore_fd);
+
+        boolean sameDevice = interop != Interop.OPAQUE_FD || !glExternal || isGlOnBridgeDevice();
+        Tier picked = (interop != null && glExternal && sameDevice && !FORCE_CPU_STAGING)
+                ? Tier.ZERO_COPY : Tier.CPU_STAGING;
         vrProvider.getLogger().logInfo(
                 "Vulkan bridge tier: " + picked
                         + (picked == Tier.CPU_STAGING
-                        ? " (GL interop " + glExternal + ", VK interop " + vkExternalSupported
+                        ? " (GL interop " + glExternal + ", VK interop " + (interop != null)
+                        + (sameDevice ? "" : ", GL and Vulkan on different GPUs")
+                        + (FORCE_CPU_STAGING ? ", forced" : "")
                         + "; expect one frame of extra latency)"
                         : "")
         );
         return picked;
+    }
+
+    private boolean isGlOnBridgeDevice() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var idProperties = VkPhysicalDeviceIDProperties.calloc(stack).sType$Default();
+            vkGetPhysicalDeviceProperties2(physicalDevice, VkPhysicalDeviceProperties2.calloc(stack)
+                    .sType$Default()
+                    .pNext(idProperties.address()));
+
+            ByteBuffer glUuid = stack.calloc(EXTMemoryObject.GL_UUID_SIZE_EXT);
+            EXTMemoryObject.glGetUnsignedBytevEXT(EXTMemoryObject.GL_DRIVER_UUID_EXT, glUuid);
+            boolean driverMatch = glUuid.equals(idProperties.driverUUID());
+            boolean deviceMatch = false;
+            int glDevices = GL11.glGetInteger(EXTMemoryObject.GL_NUM_DEVICE_UUIDS_EXT);
+            for (int i = 0; i < glDevices && !deviceMatch; i++) {
+                EXTMemoryObject.glGetUnsignedBytei_vEXT(EXTMemoryObject.GL_DEVICE_UUID_EXT, i, glUuid);
+                deviceMatch = glUuid.equals(idProperties.deviceUUID());
+            }
+            return GLUtils.drainGLErrors() == 0 && driverMatch && deviceMatch;
+        } catch (Throwable t) {
+            GLUtils.drainGLErrors();
+            vrProvider.getLogger().logDebug("GL/Vulkan device match failed: " + t.getMessage());
+            return false;
+        }
+    }
+
+    private boolean createZeroCopyTargets() {
+        try {
+            createSharedSemaphores();
+            for (int eye = 0; eye < 2; eye++) {
+                glTextures[eye] = createSharedEyeTexture(eye);
+            }
+            glSemTextures.put(0, glTextures[0]).put(1, glTextures[1]);
+            return true;
+        } catch (Throwable t) {
+            vrProvider.getLogger().logError(
+                    "Vulkan bridge zero-copy setup failed, falling back to CPU staging: " + t.getMessage()
+            );
+            discardZeroCopyTargets();
+            return false;
+        }
+    }
+
+    private void discardZeroCopyTargets() {
+        GLUtils.drainGLErrors();
+        for (int eye = 0; eye < 2; eye++) {
+            if (glTextures[eye] != 0) GL11.glDeleteTextures(glTextures[eye]);
+            if (glMemoryObjects[eye] != 0) EXTMemoryObject.glDeleteMemoryObjectsEXT(glMemoryObjects[eye]);
+            if (sharedImages[eye] != NULL) vkDestroyImage(device, sharedImages[eye], null);
+            if (sharedMemory[eye] != NULL) vkFreeMemory(device, sharedMemory[eye], null);
+            glTextures[eye] = glMemoryObjects[eye] = 0;
+            sharedImages[eye] = sharedMemory[eye] = NULL;
+        }
+        if (glSemGlDone != 0) EXTSemaphore.glDeleteSemaphoresEXT(glSemGlDone);
+        if (glSemVkDone != 0) EXTSemaphore.glDeleteSemaphoresEXT(glSemVkDone);
+        if (vkSemGlDone != NULL) vkDestroySemaphore(device, vkSemGlDone, null);
+        if (vkSemVkDone != NULL) vkDestroySemaphore(device, vkSemVkDone, null);
+        glSemGlDone = glSemVkDone = 0;
+        vkSemGlDone = vkSemVkDone = NULL;
+        GLUtils.drainGLErrors();
     }
 
     private int createSharedEyeTexture(int eyeIndex) {
@@ -662,7 +794,7 @@ public class XRVulkanBridge {
 
             var externalInfo = VkExternalMemoryImageCreateInfo.calloc(stack)
                     .sType$Default()
-                    .handleTypes(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT);
+                    .handleTypes(interop.memoryHandleType);
             var imageInfo = VkImageCreateInfo.calloc(stack)
                     .sType$Default()
                     .pNext(externalInfo.address())
@@ -688,7 +820,7 @@ public class XRVulkanBridge {
 
             var exportInfo = VkExportMemoryAllocateInfo.calloc(stack)
                     .sType$Default()
-                    .handleTypes(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT);
+                    .handleTypes(interop.memoryHandleType);
             if (dedicated) {
                 var dedicatedInfo = VkMemoryDedicatedAllocateInfo.calloc(stack)
                         .sType$Default()
@@ -705,22 +837,12 @@ public class XRVulkanBridge {
             checkVk(vkBindImageMemory(device, sharedImages[eyeIndex], sharedMemory[eyeIndex], 0),
                     "vkBindImageMemory(shared eye " + eyeIndex + ")");
 
-            var handleInfo = VkMemoryGetWin32HandleInfoKHR.calloc(stack)
-                    .sType$Default()
-                    .memory(sharedMemory[eyeIndex])
-                    .handleType(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT);
-            PointerBuffer handleBuf = stack.callocPointer(1);
-            checkVk(KHRExternalMemoryWin32.vkGetMemoryWin32HandleKHR(device, handleInfo, handleBuf),
-                    "vkGetMemoryWin32HandleKHR(eye " + eyeIndex + ")");
-
-            // a successful GL import takes ownership of the win32 handle
             int memoryObject = EXTMemoryObject.glCreateMemoryObjectsEXT();
+            glMemoryObjects[eyeIndex] = memoryObject;
             EXTMemoryObject.glMemoryObjectParameteriEXT(memoryObject,
                     EXTMemoryObject.GL_DEDICATED_MEMORY_OBJECT_EXT,
                     dedicated ? GL11.GL_TRUE : GL11.GL_FALSE);
-            EXTMemoryObjectWin32.glImportMemoryWin32HandleEXT(memoryObject, memReq.size(),
-                    EXTMemoryObjectWin32.GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, handleBuf.get(0));
-            glMemoryObjects[eyeIndex] = memoryObject;
+            importSharedMemory(stack, eyeIndex, memoryObject, memReq.size());
 
             int texture = GL11.glGenTextures();
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
@@ -734,11 +856,39 @@ public class XRVulkanBridge {
         }
     }
 
+    private void importSharedMemory(MemoryStack stack, int eyeIndex, int memoryObject, long size) {
+        if (interop == Interop.OPAQUE_FD) {
+            var fdInfo = VkMemoryGetFdInfoKHR.calloc(stack)
+                    .sType$Default()
+                    .memory(sharedMemory[eyeIndex])
+                    .handleType(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT);
+            IntBuffer fdBuf = stack.callocInt(1);
+            checkVk(KHRExternalMemoryFd.vkGetMemoryFdKHR(device, fdInfo, fdBuf),
+                    "vkGetMemoryFdKHR(eye " + eyeIndex + ")");
+
+
+            EXTMemoryObjectFD.glImportMemoryFdEXT(memoryObject, size,
+                    EXTMemoryObjectFD.GL_HANDLE_TYPE_OPAQUE_FD_EXT, fdBuf.get(0));
+        } else {
+            var handleInfo = VkMemoryGetWin32HandleInfoKHR.calloc(stack)
+                    .sType$Default()
+                    .memory(sharedMemory[eyeIndex])
+                    .handleType(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT);
+            PointerBuffer handleBuf = stack.callocPointer(1);
+            checkVk(KHRExternalMemoryWin32.vkGetMemoryWin32HandleKHR(device, handleInfo, handleBuf),
+                    "vkGetMemoryWin32HandleKHR(eye " + eyeIndex + ")");
+
+
+            EXTMemoryObjectWin32.glImportMemoryWin32HandleEXT(memoryObject, size,
+                    EXTMemoryObjectWin32.GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, handleBuf.get(0));
+        }
+    }
+
     private void createSharedSemaphores() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var exportInfo = VkExportSemaphoreCreateInfo.calloc(stack)
                     .sType$Default()
-                    .handleTypes(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT);
+                    .handleTypes(interop.semaphoreHandleType);
             var semaphoreInfo = VkSemaphoreCreateInfo.calloc(stack)
                     .sType$Default()
                     .pNext(exportInfo.address());
@@ -761,6 +911,19 @@ public class XRVulkanBridge {
     }
 
     private int importSemaphoreToGL(MemoryStack stack, long vkSemaphore, String label) {
+        if (interop == Interop.OPAQUE_FD) {
+            var fdInfo = VkSemaphoreGetFdInfoKHR.calloc(stack)
+                    .sType$Default()
+                    .semaphore(vkSemaphore)
+                    .handleType(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT);
+            IntBuffer fdBuf = stack.callocInt(1);
+            checkVk(KHRExternalSemaphoreFd.vkGetSemaphoreFdKHR(device, fdInfo, fdBuf),
+                    "vkGetSemaphoreFdKHR(" + label + ")");
+            int glSemaphore = EXTSemaphore.glGenSemaphoresEXT();
+            EXTSemaphoreFD.glImportSemaphoreFdEXT(glSemaphore,
+                    EXTSemaphoreFD.GL_HANDLE_TYPE_OPAQUE_FD_EXT, fdBuf.get(0));
+            return glSemaphore;
+        }
         var handleInfo = VkSemaphoreGetWin32HandleInfoKHR.calloc(stack)
                 .sType$Default()
                 .semaphore(vkSemaphore)
