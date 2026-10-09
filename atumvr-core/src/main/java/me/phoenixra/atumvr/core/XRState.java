@@ -53,6 +53,7 @@ public class XRState implements AtumVRState {
         vrProvider.renderer.init();
 
         initialized = true;
+        vrProvider.inputHandler.refreshCurrentInteractionProfiles();
     }
 
 
@@ -115,6 +116,11 @@ public class XRState implements AtumVRState {
                         change.toDisplayRefreshRate()
                 );
                 continue;
+            }
+
+            // action sets must be attached before the profile can be queried
+            if (vrEvent == XREvent.INTERACTION_PROFILE_CHANGED && initialized) {
+                vrProvider.inputHandler.refreshCurrentInteractionProfiles();
             }
 
             vrProvider.onXREventReceived(vrEvent);

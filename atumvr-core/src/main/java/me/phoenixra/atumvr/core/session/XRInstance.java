@@ -4,6 +4,7 @@ import lombok.Getter;
 import me.phoenixra.atumvr.api.exceptions.AtumVRException;
 import me.phoenixra.atumvr.core.XRProvider;
 import me.phoenixra.atumvr.core.enums.XRGraphicsApi;
+import me.phoenixra.atumvr.core.input.profile.types.OculusTouchXRProfile;
 import me.phoenixra.atumvr.core.session.platform.XRPlatform;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
@@ -159,7 +160,9 @@ public class XRInstance {
                 FBFoveation.XR_FB_FOVEATION_EXTENSION_NAME,
                 FBFoveationConfiguration.XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME,
                 FBSwapchainUpdateState.XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
-                FBPassthrough.XR_FB_PASSTHROUGH_EXTENSION_NAME
+                FBPassthrough.XR_FB_PASSTHROUGH_EXTENSION_NAME,
+                // not in LWJGL 3.3.3 bindings, so no capability flag, check isExtensionEnabled
+                OculusTouchXRProfile.META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME
         ));
         if (!XRPlatform.isAndroid()) {
             desiredExtensions.add(EXTDebugUtils.XR_EXT_DEBUG_UTILS_EXTENSION_NAME);
