@@ -33,6 +33,16 @@ public class XRDeviceController extends XRDevice implements AtumVRDeviceControll
     @Getter
     private boolean gripActive;
 
+    /**
+     * If the aim / grip pose was located (valid position and orientation)
+     * on the last update. Not located poses are identity,
+     * e.g. a controller that is idle or out of tracking while its action is active
+     */
+    @Getter
+    private boolean poseValid;
+    @Getter
+    private boolean gripPoseValid;
+
     @Getter
     private final AtumVRPoseMutable gripPose = new AtumVRPoseMutable();
 
@@ -60,14 +70,16 @@ public class XRDeviceController extends XRDevice implements AtumVRDeviceControll
 
     @Override
     public void update() {
-        var subActionAim = aimAction.getSubActions().get(type.ordinal());
-        var subActionGrip = gripAction.getSubActions().get(type.ordinal());
+        var subActionAim = aimAction.getSubActionsAsPose().get(type.ordinal());
+        var subActionGrip = gripAction.getSubActionsAsPose().get(type.ordinal());
 
         pose.update(subActionAim.getCurrentState());
         active = subActionAim.isActive();
+        poseValid = subActionAim.isLocated();
 
         gripPose.update(subActionGrip.getCurrentState());
         gripActive = subActionGrip.isActive();
+        gripPoseValid = subActionGrip.isLocated();
 
 
 
