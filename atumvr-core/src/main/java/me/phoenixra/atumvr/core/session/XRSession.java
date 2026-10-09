@@ -48,6 +48,9 @@ public class XRSession implements AtumVRSession {
     protected XRVulkanBridge vulkanBridge;
 
     @Getter
+    protected XRPassthrough passthrough;
+
+    @Getter
     protected float requestedDisplayRefreshRate = Float.NaN;
 
     @Getter
@@ -61,6 +64,7 @@ public class XRSession implements AtumVRSession {
         instance = new XRInstance(vrProvider);
         system = new XRSystem(vrProvider);
         swapChain = new XRSwapChain(vrProvider);
+        passthrough = new XRPassthrough(vrProvider);
     }
 
 
@@ -78,6 +82,7 @@ public class XRSession implements AtumVRSession {
             }
         }
         swapChain.init();
+        passthrough.init(handle);
     }
 
 
@@ -314,6 +319,10 @@ public class XRSession implements AtumVRSession {
     public void destroy(){
 
         requestExitAndDrain();
+
+        try {
+            passthrough.destroy();
+        } catch (Throwable ignored) {}
 
         try {
             swapChain.destroy();

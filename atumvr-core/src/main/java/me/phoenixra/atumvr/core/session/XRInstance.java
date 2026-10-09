@@ -158,7 +158,8 @@ public class XRInstance {
                 FBColorSpace.XR_FB_COLOR_SPACE_EXTENSION_NAME,
                 FBFoveation.XR_FB_FOVEATION_EXTENSION_NAME,
                 FBFoveationConfiguration.XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME,
-                FBSwapchainUpdateState.XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME
+                FBSwapchainUpdateState.XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
+                FBPassthrough.XR_FB_PASSTHROUGH_EXTENSION_NAME
         ));
         if (!XRPlatform.isAndroid()) {
             desiredExtensions.add(EXTDebugUtils.XR_EXT_DEBUG_UTILS_EXTENSION_NAME);

@@ -336,12 +336,16 @@ public abstract class XRRenderer implements AtumVRRenderer {
                     );
                 }
 
+                PointerBuffer layers = stack.callocPointer(2);
+                // passthrough goes under the projection layer
+                long projectionFlags = vrProvider.preparePassthroughLayer(stack, layers);
+
                 XrCompositionLayerProjection compositionLayerProjection = XrCompositionLayerProjection.calloc(stack)
                         .type(XR10.XR_TYPE_COMPOSITION_LAYER_PROJECTION)
+                        .layerFlags(projectionFlags)
                         .space(vrProvider.getSession().getXrAppSpace())
                         .views(this.projectionLayerViews);
 
-                PointerBuffer layers = stack.callocPointer(1);
                 layers.put(compositionLayerProjection);
                 layers.flip();
 

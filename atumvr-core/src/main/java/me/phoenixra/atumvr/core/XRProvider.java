@@ -4,6 +4,8 @@ import lombok.Getter;
 import lombok.Setter;
 import me.phoenixra.atumvr.api.AtumVRLogger;
 import me.phoenixra.atumvr.api.AtumVRProvider;
+import me.phoenixra.atumvr.api.input.profile.tracker.ViveTrackerRole;
+import me.phoenixra.atumvr.api.mr.TableAnchor;
 import me.phoenixra.atumvr.api.rendering.AtumVRRenderer;
 import me.phoenixra.atumvr.core.enums.XREvent;
 import me.phoenixra.atumvr.api.exceptions.AtumVRException;
@@ -19,6 +21,7 @@ import me.phoenixra.atumvr.core.input.profile.tracker.FBBodyTrackingProvider;
 import me.phoenixra.atumvr.core.input.profile.types.SteamFrameXRProfile;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.openxr.*;
@@ -65,10 +68,16 @@ public abstract class XRProvider implements AtumVRProvider {
     @Getter
     private volatile boolean shuttingDown = false;
 
+    /** Passthrough state requested by app, applied by renderer on frame submission */
+    private volatile boolean passthroughRequested = false;
+
+    private final TableAnchor tableAnchor;
+
     public XRProvider(@NotNull String appName,
                       @NotNull AtumVRLogger logger){
         this.appName = appName;
         this.logger = logger;
+        this.tableAnchor = new TableAnchor(logger);
         this.state = createStateHandler();
         this.renderer = createRenderer();
         this.inputHandler = createInputHandler();
@@ -306,6 +315,49 @@ public abstract class XRProvider implements AtumVRProvider {
     @Override
     public void postRender() {
 
+    }
+
+    // -------- MIXED REALITY --------
+
+    @Override
+    public boolean isPassthroughSupported() {
+        return session != null
+                && session.getPassthrough() != null
+                && session.getPassthrough().isSupported();
+    }
+
+    @Override
+    public void setPassthroughEnabled(boolean enabled) {
+        passthroughRequested = enabled;
+    }
+
+    @Override
+    public boolean isPassthroughEnabled() {
+        return passthroughRequested && isPassthroughSupported();
+    }
+
+    @Override
+    public @NotNull TableAnchor getTableAnchor() {
+        return tableAnchor;
+    }
+
+    /**
+     * Start/pause passthrough as requested, and put its composition layer
+     * to the layers buffer if running.
+     * <p>
+     *     Call from the renderer right before putting the projection layer
+     * </p>
+     *
+     * @param stack the memory stack, valid until xrEndFrame
+     * @param layers the layers buffer, must have space for 1 extra layer
+     * @return flags to apply to the projection layer
+     */
+    public long preparePassthroughLayer(@NotNull MemoryStack stack,
+                                        @NotNull PointerBuffer layers) {
+        var passthrough = session.getPassthrough();
+        passthrough.sync(passthroughRequested);
+        passthrough.putLayer(stack, layers);
+        return passthrough.getProjectionLayerFlags();
     }
 
     /**
