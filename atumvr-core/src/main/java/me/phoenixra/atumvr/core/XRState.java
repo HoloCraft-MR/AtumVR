@@ -37,6 +37,26 @@ public class XRState implements AtumVRState {
     @Getter
     protected boolean focused = false;
 
+    /**
+     * Session is running (between xrBeginSession and xrEndSession).
+     * Frames may only be submitted while running
+     */
+    @Getter
+    protected boolean sessionRunning = false;
+
+    /**
+     * Session (or instance) is being lost: unrecoverable without recreating it
+     */
+    @Getter
+    protected boolean sessionLost = false;
+
+    @Getter
+    protected XRSessionState sessionState = XRSessionState.UNKNOWN;
+
+    /** Number of times the session was (re)started */
+    @Getter
+    protected int sessionStarts = 0;
+
 
     public XRState(@NotNull XRProvider vrProvider){
         this.vrProvider = vrProvider;
@@ -95,9 +115,21 @@ public class XRState implements AtumVRState {
                 continue;
             }
 
+            if (vrEvent == XREvent.INSTANCE_LOSS_PENDING) {
+                sessionLost = true;
+                sessionRunning = false;
+                active = false;
+                focused = false;
+                vrProvider.getLogger().logError("[MR] Session instance loss pending: OpenXR runtime is going away, restart VR");
+                vrProvider.onSessionLost("instance loss pending");
+                continue;
+            }
+
             if (vrEvent == XREvent.REFERENCE_SPACE_CHANGE_PENDING) {
                 XrEventDataReferenceSpaceChangePending change =
                         XrEventDataReferenceSpaceChangePending.create(event.address());
+                vrProvider.onReferenceSpaceChangePending(
+                        change.referenceSpaceType(), change.changeTime(), change.poseValid());
                 vrProvider.getLogger().logInfo(
                         "Reference space change pending: type="
                                 + change.referenceSpaceType()
@@ -133,45 +165,74 @@ public class XRState implements AtumVRState {
 
     private void xrStateChanged(XrEventDataSessionStateChanged event) {
         var stateChange = XRSessionState.fromId(event.state());
-        vrProvider.getLogger().logDebug("VR Session State changed to: "+stateChange);
-
+        var previous = sessionState;
+        sessionState = stateChange;
+        vrProvider.getLogger().logInfo("[MR] Session state " + previous + " -> " + stateChange
+                + " (running=" + sessionRunning + ")");
 
         switch (stateChange) {
             case READY -> {
+                if (sessionRunning) {
+                    vrProvider.getLogger().logInfo("[MR] Session READY while already running, ignored");
+                    break;
+                }
+                int result;
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     XrSessionBeginInfo sessionBeginInfo = XrSessionBeginInfo.calloc(stack)
                             .type(XR10.XR_TYPE_SESSION_BEGIN_INFO)
                             .next(NULL)
                             .primaryViewConfigurationType(XR10.XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
-
-                    vrProvider.checkXRError(
-                            XR10.xrBeginSession(vrProvider.getSession().getHandle(), sessionBeginInfo),
-                            "xrBeginSession", "XRStateChangeREADY"
-                    );
+                    result = XR10.xrBeginSession(vrProvider.getSession().getHandle(), sessionBeginInfo);
                 }
+                if (result < 0 && result != XR10.XR_ERROR_SESSION_RUNNING) {
+                    // first start: fatal like before; restart: keep polling, the runtime may retry
+                    vrProvider.checkXRError(!initialized, result, "xrBeginSession", "XRStateChangeREADY");
+                    break;
+                }
+                sessionStarts++;
+                sessionRunning = true;
                 ready = true;
                 active = true; //for convenience
                 vrProvider.getSession().requestPreferredDisplayRefreshRate();
+                if (initialized) {
+                    vrProvider.getLogger().logInfo("[MR] Session restarted (start #" + sessionStarts
+                            + "), resuming frames");
+                    try {
+                        vrProvider.inputHandler.refreshCurrentInteractionProfiles();
+                    } catch (Throwable t) {
+                        vrProvider.getLogger().logError("[MR] Session restart: profile refresh failed: " + t);
+                    }
+                }
                 vrProvider.getLogger().logInfo("OpenXR session is READY");
-
             }
 
             case STOPPING -> {
                 ready = false;
+                // headset off / Guardian or tracking-lost interstitial / system UI:
+                // end the session (required by the spec) and wait for READY again.
+                // Keep 'initialized': swapchains, actions and GL stay valid across End/Begin
                 active = false;
-                vrProvider.checkXRError(
-                        false,
-                        XR10.xrEndSession(vrProvider.getSession().getHandle()),
-                        "xrEndSession", "XRStateChangeSTOPPING"
-                );
-                vrProvider.getLogger().logInfo("OpenXR session is STOPPED");
+                if (sessionRunning) {
+                    int result = XR10.xrEndSession(vrProvider.getSession().getHandle());
+                    sessionRunning = false;
+                    vrProvider.getLogger().logInfo("[MR] Session ended on STOPPING (xrEndSession "
+                            + vrProvider.getXRActionResult(result) + "), waiting for READY");
+                }
             }
 
-            case VISIBLE -> active = true;
+            case LOSS_PENDING -> {
+                active = false;
+                sessionRunning = false;
+                sessionLost = true;
+                vrProvider.getLogger().logError("[MR] Session LOSS_PENDING: session lost, restart VR");
+                vrProvider.onSessionLost("session loss pending");
+            }
 
-            case FOCUSED -> active = true;
+            case VISIBLE, FOCUSED -> active = true;
 
             case EXITING, IDLE, SYNCHRONIZED -> active = false;
+
+            default -> {}
         }
 
         focused = stateChange == XRSessionState.FOCUSED;
@@ -189,5 +250,6 @@ public class XRState implements AtumVRState {
         active = false;
         focused = false;
         initialized = false;
+        sessionRunning = false;
     }
 }

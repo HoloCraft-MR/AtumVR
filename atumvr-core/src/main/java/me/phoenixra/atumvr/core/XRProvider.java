@@ -260,9 +260,26 @@ public abstract class XRProvider implements AtumVRProvider {
         state.pollVREvents();
     }
 
+    /** Idle sleep per game loop while the session isn't running (ms) */
+    private static final long IDLE_SLEEP_MS = 20L;
+
+    /**
+     * @return true if frames can be submitted (initialized and session running)
+     */
+    public boolean isSessionRunning() {
+        return state.isInitialized() && state.isSessionRunning() && !state.isSessionLost();
+    }
+
     @Override
     public void startFrame() {
         if(!state.isInitialized() || !state.isReady()){
+            return;
+        }
+        if(!isSessionRunning()){
+            // not running: no xrWaitFrame/xrBeginFrame; throttle, keep polling events
+            try { Thread.sleep(IDLE_SLEEP_MS); } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
             return;
         }
         renderer.prepareFrame();
@@ -272,7 +289,7 @@ public abstract class XRProvider implements AtumVRProvider {
 
     @Override
     public void render(@NotNull AtumVRRenderContext context) {
-        if(!state.isInitialized() || !state.isReady()){
+        if(!isSessionRunning()){
             return;
         }
         renderer.renderFrame(context);
@@ -375,6 +392,24 @@ public abstract class XRProvider implements AtumVRProvider {
      * @param state the new session state
      */
     protected void onStateChanged(@NotNull XRSessionState state){
+
+    }
+
+    /**
+     * Reference space change pending (recenter, floor change).
+     * Called from VRState only. Do nothing by default
+     */
+    protected void onReferenceSpaceChangePending(int referenceSpaceType, long changeTime, boolean poseValid){
+        if (session != null && session.getSpatialAnchors() != null) {
+            session.getSpatialAnchors().onReferenceSpaceChanged();
+        }
+    }
+
+    /**
+     * Session or instance lost (LOSS_PENDING / INSTANCE_LOSS_PENDING): unrecoverable in place.
+     * Called from VRState only. Do nothing by default
+     */
+    protected void onSessionLost(@NotNull String reason){
 
     }
 

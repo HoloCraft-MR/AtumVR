@@ -150,6 +150,20 @@ public class XRSpatialAnchors {
         locate();
     }
 
+    /**
+     * Reference space changed (recenter / floor change): the anchor is re-located
+     * in the new space from the next frame; drop the stale located pose and re-log it
+     */
+    public void onReferenceSpaceChanged() {
+        locateFailures = 0;
+        locatedLogged = false;
+        if (vrProvider.getTableAnchor() != null) {
+            vrProvider.getTableAnchor().setAnchoredPose(null);
+        }
+        log("[MR] Anchor re-locate after reference space change"
+                + (anchor != null ? " (anchor " + anchorUuid + ")" : " (no anchor, placed pose kept)"));
+    }
+
     // -------- CREATE / COMPONENTS / SAVE --------
 
     private void startCreate(@NotNull TablePose pose) {
