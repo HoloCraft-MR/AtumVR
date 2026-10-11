@@ -161,6 +161,10 @@ public class XRInstance {
                 FBFoveationConfiguration.XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME,
                 FBSwapchainUpdateState.XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
                 FBPassthrough.XR_FB_PASSTHROUGH_EXTENSION_NAME,
+                // spatial anchors for the MR table (XRSpatialAnchors)
+                FBSpatialEntity.XR_FB_SPATIAL_ENTITY_EXTENSION_NAME,
+                FBSpatialEntityStorage.XR_FB_SPATIAL_ENTITY_STORAGE_EXTENSION_NAME,
+                FBSpatialEntityQuery.XR_FB_SPATIAL_ENTITY_QUERY_EXTENSION_NAME,
                 // not in LWJGL 3.3.3 bindings, so no capability flag, check isExtensionEnabled
                 OculusTouchXRProfile.META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME
         ));

@@ -263,6 +263,7 @@ public abstract class XRProvider implements AtumVRProvider {
         }
         renderer.prepareFrame();
         inputHandler.update();
+        session.getSpatialAnchors().update();
     }
 
     @Override

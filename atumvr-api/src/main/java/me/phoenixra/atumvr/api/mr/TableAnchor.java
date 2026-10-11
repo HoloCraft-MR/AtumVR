@@ -10,13 +10,24 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
+import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Holds the manually placed {@link TablePose} and persists it
  * to a properties file in a configurable directory.
  * <p>
- *     Manual placement only: no scene API or spatial anchors are used,
- *     so the pose is only valid as long as the runtime keeps the same
+ *     If the provider supports spatial anchors (Meta XR_FB_spatial_entity),
+ *     each placement is also turned into a persisted world-locked anchor:
+ *     the provider polls {@link #pollPlaceRequest()}, reports the located
+ *     anchor pose every frame via {@link #setAnchoredPose(TablePose)} and the
+ *     saved anchor UUID via {@link #onAnchorSaved(UUID)}. The app stores that
+ *     UUID and hands it back with {@link #setSavedAnchorUuid(UUID)} on start,
+ *     so the anchor is loaded again.
+ * </p>
+ * <p>
+ *     Without anchors (or while the anchor is not located) the placed pose is used,
+ *     which is only valid as long as the runtime keeps the same
  *     reference space origin (e.g. no guardian/boundary reset).
  * </p>
  */
@@ -27,6 +38,13 @@ public class TableAnchor {
 
     private volatile TablePose pose;
     private Path directory;
+
+    /** Pose of the located spatial anchor this frame, null if none / not located */
+    private volatile TablePose anchoredPose;
+    /** Placement waiting for the provider to create a spatial anchor */
+    private TablePose placeRequest;
+    private volatile UUID savedAnchorUuid;
+    private Consumer<UUID> anchorSavedListener;
 
     public TableAnchor(@NotNull AtumVRLogger logger) {
         this.logger = logger;
@@ -42,22 +60,92 @@ public class TableAnchor {
         load();
     }
 
+    /**
+     * @return the located spatial anchor pose if available, else the placed pose
+     */
     public @Nullable TablePose getPose() {
-        return pose;
+        TablePose anchored = anchoredPose;
+        return anchored != null ? anchored : pose;
     }
 
     public boolean hasPose() {
-        return pose != null;
+        return getPose() != null;
     }
 
     /**
-     * Set the table pose and persist it, if storage directory is configured
+     * Set the table pose and persist it, if storage directory is configured.
+     * A non-null pose is also requested as a new spatial anchor
      *
      * @param pose the new pose or null to clear it
      */
     public synchronized void setPose(@Nullable TablePose pose) {
         this.pose = pose;
+        this.anchoredPose = null;
+        this.placeRequest = pose;
         save();
+    }
+
+    // -------- SPATIAL ANCHOR (provider side) --------
+
+    /**
+     * Take the pending placement to create a spatial anchor for
+     *
+     * @return the pose or null if none
+     */
+    public synchronized @Nullable TablePose pollPlaceRequest() {
+        TablePose request = placeRequest;
+        placeRequest = null;
+        return request;
+    }
+
+    /**
+     * Set the located anchor pose for this frame
+     *
+     * @param pose the pose in the app reference space, or null if not located
+     */
+    public void setAnchoredPose(@Nullable TablePose pose) {
+        this.anchoredPose = pose;
+    }
+
+    /**
+     * Saved anchor changed: a new anchor was saved, or null if the placement
+     * could not be saved (then the placed pose is used on next start)
+     *
+     * @param uuid the saved anchor UUID or null
+     */
+    public void onAnchorSaved(@Nullable UUID uuid) {
+        savedAnchorUuid = uuid;
+        Consumer<UUID> listener = anchorSavedListener;
+        if (listener != null) {
+            listener.accept(uuid);
+        }
+    }
+
+    // -------- SPATIAL ANCHOR (app side) --------
+
+    /**
+     * @return UUID of the persisted spatial anchor to load, or null
+     */
+    public @Nullable UUID getSavedAnchorUuid() {
+        return savedAnchorUuid;
+    }
+
+    /**
+     * Set UUID of the persisted spatial anchor, loaded by the provider when its session starts
+     *
+     * @param uuid the UUID or null
+     */
+    public void setSavedAnchorUuid(@Nullable UUID uuid) {
+        this.savedAnchorUuid = uuid;
+    }
+
+    /**
+     * Called with the new saved anchor UUID (or null), so the app can store it
+     *
+     * @param listener the listener, called on the render thread
+     */
+    public void setAnchorSavedListener(@Nullable Consumer<UUID> listener) {
+        this.anchorSavedListener = listener;
     }
 
     private void load() {

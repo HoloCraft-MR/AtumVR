@@ -71,6 +71,9 @@ public class XRState implements AtumVRState {
                 break;
             }
             var event = XrEventDataBaseHeader.create(eventBuffer.address());
+            if (vrProvider.getSession().getSpatialAnchors().onEvent(event.type(), event.address())) {
+                continue;
+            }
             var vrEvent = XREvent.fromId(event.type());
 
             if (vrEvent == XREvent.SESSION_STATE_CHANGED) {
