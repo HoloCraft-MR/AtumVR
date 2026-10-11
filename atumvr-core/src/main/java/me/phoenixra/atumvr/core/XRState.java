@@ -53,6 +53,27 @@ public class XRState implements AtumVRState {
     @Getter
     protected XRSessionState sessionState = XRSessionState.UNKNOWN;
 
+    /**
+     * Initialized but the session isn't running (STOPPING/IDLE, waiting for READY):
+     * VR is paused, NOT stopped. Only EXITING / loss end VR
+     */
+    public boolean isPaused() {
+        return initialized && !sessionRunning && !sessionLost
+                && sessionState != XRSessionState.EXITING;
+    }
+
+    /**
+     * Active for the app: running VISIBLE/FOCUSED, or paused waiting for READY
+     * (so the game doesn't treat a headset-off as "VR stopped" and leave the world)
+     */
+    @Override
+    public boolean isActive() {
+        return active || isPaused();
+    }
+
+    private long lastWaitingLogNs;
+    private int eventsWhilePaused;
+
     /** Number of times the session was (re)started */
     @Getter
     protected int sessionStarts = 0;
@@ -90,6 +111,7 @@ public class XRState implements AtumVRState {
                 //no more events available
                 break;
             }
+            if (isPaused()) eventsWhilePaused++;
             var event = XrEventDataBaseHeader.create(eventBuffer.address());
             if (vrProvider.getSession().getSpatialAnchors().onEvent(event.type(), event.address())) {
                 continue;
@@ -159,6 +181,17 @@ public class XRState implements AtumVRState {
             }
 
             vrProvider.onXREventReceived(vrEvent);
+        }
+        if (isPaused()) {
+            long now = System.nanoTime();
+            if (now - lastWaitingLogNs > 5_000_000_000L) {
+                lastWaitingLogNs = now;
+                vrProvider.getLogger().logInfo("[MR] Session waiting for READY (polling, state="
+                        + sessionState + ", " + eventsWhilePaused + " events)");
+            }
+        } else {
+            eventsWhilePaused = 0;
+            lastWaitingLogNs = 0;
         }
         vrProvider.getSession().maintainPreferredDisplayRefreshRate(focused);
     }

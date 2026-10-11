@@ -266,6 +266,10 @@ public abstract class XRProvider implements AtumVRProvider {
     /**
      * @return true if frames can be submitted (initialized and session running)
      */
+    public boolean isSessionPaused() {
+        return state.isPaused();
+    }
+
     public boolean isSessionRunning() {
         return state.isInitialized() && state.isSessionRunning() && !state.isSessionLost();
     }
