@@ -232,6 +232,10 @@ public abstract class XRProvider implements AtumVRProvider {
         return 120f;
     }
 
+    /** Called when the runtime reports a display refresh rate change (XR_FB_display_refresh_rate) */
+    public void onDisplayRefreshRateChanged(float from, float to){
+    }
+
     public int getFoveationLevel(){
         return FBFoveationConfiguration.XR_FOVEATION_LEVEL_MEDIUM_FB;
     }

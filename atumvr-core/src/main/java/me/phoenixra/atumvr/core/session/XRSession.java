@@ -59,6 +59,10 @@ public class XRSession implements AtumVRSession {
     @Getter
     protected float currentDisplayRefreshRate = Float.NaN;
 
+    /** Rates enumerated via XR_FB_display_refresh_rate (empty: extension missing) */
+    @Getter
+    protected float[] supportedDisplayRefreshRates = new float[0];
+
     private long nextDisplayRefreshRateCheckNanos = Long.MAX_VALUE;
     private int displayRefreshRateRequestCount;
 
@@ -196,15 +200,11 @@ public class XRSession implements AtumVRSession {
                 "second call"
         );
 
-        float chosen = Float.NaN;
-        for (int i = 0; i < refreshRateCount.get(0); i++) {
-            float rate = refreshRateBuffer.get(i);
-            if (Float.isNaN(chosen)
-                    || Math.abs(rate - preferred) < Math.abs(chosen - preferred)
-                    || (Math.abs(rate - preferred) == Math.abs(chosen - preferred) && rate < chosen)) {
-                chosen = rate;
-            }
+        supportedDisplayRefreshRates = new float[refreshRateCount.get(0)];
+        for (int i = 0; i < supportedDisplayRefreshRates.length; i++) {
+            supportedDisplayRefreshRates[i] = refreshRateBuffer.get(i);
         }
+        float chosen = nearestSupportedDisplayRefreshRate(preferred);
         if (Float.isNaN(chosen)) {
             return;
         }
@@ -223,6 +223,35 @@ public class XRSession implements AtumVRSession {
                         + chosen + " Hz (preferred " + preferred + " Hz)"
         );
         updateCurrentDisplayRefreshRate(stack);
+    }
+
+    /** Nearest supported rate to {@code preferred} (ties: lower), NaN if none are known */
+    public float nearestSupportedDisplayRefreshRate(float preferred) {
+        float chosen = Float.NaN;
+        for (float rate : supportedDisplayRefreshRates) {
+            if (Float.isNaN(chosen)
+                    || Math.abs(rate - preferred) < Math.abs(chosen - preferred)
+                    || (Math.abs(rate - preferred) == Math.abs(chosen - preferred) && rate < chosen)) {
+                chosen = rate;
+            }
+        }
+        return chosen;
+    }
+
+    /**
+     * Changes the requested rate at runtime (nearest supported one); the request is
+     * (re)submitted by {@link #maintainPreferredDisplayRefreshRate} on the next focused poll
+     * @return the rate that will be requested, NaN if refresh rates can't be changed
+     */
+    public float setPreferredDisplayRefreshRate(float preferred) {
+        float chosen = nearestSupportedDisplayRefreshRate(preferred);
+        if (Float.isNaN(chosen)) {
+            return Float.NaN;
+        }
+        requestedDisplayRefreshRate = chosen;
+        displayRefreshRateRequestCount = 0;
+        nextDisplayRefreshRateCheckNanos = 0L;
+        return chosen;
     }
 
     public void requestPreferredDisplayRefreshRate() {
@@ -276,6 +305,7 @@ public class XRSession implements AtumVRSession {
         vrProvider.getLogger().logInfo(
                 "Display refresh rate changed: " + from + " Hz -> " + to + " Hz"
         );
+        vrProvider.onDisplayRefreshRateChanged(from, to);
     }
 
     private void updateCurrentDisplayRefreshRate(MemoryStack stack) {
