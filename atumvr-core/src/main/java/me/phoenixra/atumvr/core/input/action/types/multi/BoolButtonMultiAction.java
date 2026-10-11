@@ -53,13 +53,22 @@ public class BoolButtonMultiAction extends XRMultiAction<Boolean> {
                         ),
                         "xrGetActionStateBoolean"
                 );
+                boolean value = state.currentState();
+                boolean changedSinceLastSync = state.changedSinceLastSync();
+                boolean isActive = state.isActive();
+                // this hand is driven by hand tracking (controller not active / located)
+                if (entry.handValue != null) {
+                    value = entry.handValue;
+                    changedSinceLastSync = value != entry.getCurrentState();
+                    isActive = true;
+                }
                 entry.update(
-                        state.currentState(),
-                        state.lastChangeTime(),
-                        state.changedSinceLastSync(),
-                        state.isActive()
+                        value,
+                        changedSinceLastSync ? vrProvider.getXrDisplayTime() : entry.getLastChangeTime(),
+                        changedSinceLastSync,
+                        isActive
                 );
-                if(state.changedSinceLastSync()){
+                if(changedSinceLastSync){
                     vrProvider.getInputHandler().onActionChanged(
                             entry
                     );
@@ -75,6 +84,19 @@ public class BoolButtonMultiAction extends XRMultiAction<Boolean> {
 
 
     public static class SubActionBoolButton extends SubAction<Boolean> implements VRActionDataButton {
+
+        /** Value from a tracked hand, set while the hand drives the controller (null = none) */
+        protected Boolean handValue;
+
+        /**
+         * Hand tracking input for this sub-action, overrides the controller
+         * action state (set only while the hand drives the controller)
+         *
+         * @param value the value, or null for none
+         */
+        public void setHandValue(Boolean value) {
+            handValue = value;
+        }
 
 
         public SubActionBoolButton(@NotNull VRActionIdentifier id,

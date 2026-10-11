@@ -165,6 +165,9 @@ public class XRInstance {
                 FBSpatialEntity.XR_FB_SPATIAL_ENTITY_EXTENSION_NAME,
                 FBSpatialEntityStorage.XR_FB_SPATIAL_ENTITY_STORAGE_EXTENSION_NAME,
                 FBSpatialEntityQuery.XR_FB_SPATIAL_ENTITY_QUERY_EXTENSION_NAME,
+                // hands without controllers (XRHandTracking)
+                EXTHandTracking.XR_EXT_HAND_TRACKING_EXTENSION_NAME,
+                FBHandTrackingAim.XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME,
                 // not in LWJGL 3.3.3 bindings, so no capability flag, check isExtensionEnabled
                 OculusTouchXRProfile.META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME
         ));

@@ -19,6 +19,9 @@ import me.phoenixra.atumvr.api.input.treadmill.AtumVRTreadmillView;
 import me.phoenixra.atumvr.core.input.body.XRBody;
 import me.phoenixra.atumvr.core.input.device.XRDevice;
 import me.phoenixra.atumvr.core.input.haptics.XRBodyHapticsProvider;
+import me.phoenixra.atumvr.api.input.device.AtumVRDeviceController;
+import me.phoenixra.atumvr.core.input.device.XRDeviceController;
+import me.phoenixra.atumvr.core.input.hand.XRHandTracking;
 import me.phoenixra.atumvr.core.input.profile.XRInteractionProfile;
 import me.phoenixra.atumvr.core.input.profile.tracker.XRTrackerProvider;
 import me.phoenixra.atumvr.core.input.profile.tracker.hand.XRHandsProvider;
@@ -89,6 +92,11 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
 
     private final Map<String, String> lastLoggedInteractionProfile = new HashMap<>();
     private final Map<ControllerType, String> currentProfilePaths = new EnumMap<>(ControllerType.class);
+
+    /** Tracked hands, used in place of a controller that is not active */
+    @Getter
+    private XRHandTracking handTracking;
+    private final boolean[] handDriven = new boolean[ControllerType.values().length];
 
 
     public XRInputHandler(@NotNull XRProvider vrProvider){
@@ -258,6 +266,9 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
             if(bodyHapticsProvider != null){
                 bodyHapticsProvider.onAttached();
             }
+            //HAND TRACKING (before devices, controllers read it)
+            handTracking = new XRHandTracking(vrProvider);
+            handTracking.init(xrSession, vrProvider.getSession().getSystem().getSystemId());
 
             //LOAD DEVICES
             devices.clear();
@@ -384,7 +395,19 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
             }
         }
 
+        // hands first: the Touch profile and controller devices fall back to them
+        if (handTracking != null) {
+            handTracking.update();
+        }
+        for (ControllerType type : ControllerType.values()) {
+            // last frame's device state (devices update after the actions)
+            handDriven[type.ordinal()] = devices.get(AtumVRDeviceController.getId(type))
+                    instanceof XRDeviceController controller && controller.isHandDriven();
+        }
         for (XRActionSet entry : activeActionSets) {
+            if (entry instanceof OculusTouchXRProfile touch) {
+                touch.applyHands(handTracking, handDriven);
+            }
             entry.update();
         }
         if (bodyTrackingEnabled) {
@@ -992,6 +1015,10 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
         bodyHapticsResolved = false;
         vrBody.clearSources();
 
+        if (handTracking != null) {
+            handTracking.destroy();
+            handTracking = null;
+        }
         actionSets.values().forEach(XRActionSet::destroy);
         actionSets.clear();
         appActionSets.clear();
