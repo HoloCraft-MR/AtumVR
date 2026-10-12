@@ -193,6 +193,14 @@ public class XRInstance {
 
 
     private XRGraphicsApi resolveGraphicsApi() {
+        if (XRPlatform.get() instanceof XRPlatform.Android) {
+            // Android sessions bind the EGL context provided by the AndroidXRBridge
+            String extension = XRPlatform.get().getGraphicsExtension();
+            if (!availableExtensions.contains(extension)) {
+                throw new AtumVRException("Missing required graphics extension: " + extension);
+            }
+            return XRGraphicsApi.OPENGL_ES;
+        }
         XRGraphicsApi forced = vrProvider.getGraphicsApiPreference();
         if (forced != null) {
             if (!availableExtensions.contains(forced.getExtensionName())) {
