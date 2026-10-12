@@ -3,6 +3,7 @@ package me.phoenixra.atumvr.core.session;
 import lombok.Getter;
 import me.phoenixra.atumvr.api.AtumVRSession;
 import me.phoenixra.atumvr.core.enums.XRGraphicsApi;
+import me.phoenixra.atumvr.core.session.platform.XRPlatform;
 import me.phoenixra.atumvr.core.session.vulkan.XRVulkanBridge;
 import me.phoenixra.atumvr.core.utils.XRUtils;
 import me.phoenixra.atumvr.core.XRProvider;
@@ -70,8 +71,11 @@ public class XRSession implements AtumVRSession {
             initSession(stack);
             initSpaces(stack);
             initDisplayRefreshRate(stack);
-            initPerformanceLevels();
-            initColorSpace();
+            //Quest runtime tuning, desktop runtimes keep their defaults
+            if (XRPlatform.isAndroid()) {
+                initPerformanceLevels();
+                initColorSpace();
+            }
         }
         swapChain.init();
     }
@@ -129,7 +133,7 @@ public class XRSession implements AtumVRSession {
                         XrVector3f.calloc(stack).set(0f, 0f, 0f)
                 );
 
-        xrAppSpaceType = handle.getCapabilities().XR_EXT_local_floor
+        xrAppSpaceType = XRPlatform.isAndroid() && handle.getCapabilities().XR_EXT_local_floor
                 ? EXTLocalFloor.XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT
                 : XR10.XR_REFERENCE_SPACE_TYPE_STAGE;
 
