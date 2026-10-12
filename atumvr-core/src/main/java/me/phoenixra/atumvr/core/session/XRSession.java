@@ -10,7 +10,6 @@ import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.Struct;
 
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -91,14 +90,14 @@ public class XRSession implements AtumVRSession {
 
         long systemId = system.getSystemId();
 
-        Struct<?> graphicsBind;
+        long graphicsBind;
         if (instance.getGraphicsApi() == XRGraphicsApi.VULKAN) {
             vulkanBridge = new XRVulkanBridge(vrProvider);
             graphicsBind = vulkanBridge.createGraphicsBinding(
                     stack,
                     instance.getHandle(),
                     systemId
-            );
+            ).address();
         } else {
             graphicsBind = system.createGraphicsBinding(
                     stack,
@@ -109,7 +108,7 @@ public class XRSession implements AtumVRSession {
         }
         var sessionInfo = XrSessionCreateInfo.calloc(stack)
                 .type(XR10.XR_TYPE_SESSION_CREATE_INFO)
-                .next(graphicsBind.address())
+                .next(graphicsBind)
                 .systemId(systemId)
                 .createFlags(0);
 

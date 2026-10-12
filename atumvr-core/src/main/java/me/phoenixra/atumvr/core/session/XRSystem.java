@@ -7,7 +7,6 @@ import me.phoenixra.atumvr.core.session.platform.XRPlatform;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.Struct;
 
 import java.nio.LongBuffer;
 
@@ -86,7 +85,7 @@ public class XRSystem {
     }
 
 
-    public Struct<?> createGraphicsBinding(MemoryStack stack,
+    public long createGraphicsBinding(MemoryStack stack,
                                             XrInstance instance,
                                             long systemID,
                                             long windowHandle) {

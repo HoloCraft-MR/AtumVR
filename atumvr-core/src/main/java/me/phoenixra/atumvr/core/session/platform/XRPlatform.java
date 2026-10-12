@@ -1,15 +1,10 @@
 package me.phoenixra.atumvr.core.session.platform;
 
 import me.phoenixra.atumvr.api.exceptions.AtumVRException;
-import org.lwjgl.openxr.XrGraphicsBindingOpenGLESAndroidKHR;
 import org.lwjgl.openxr.XrGraphicsBindingOpenGLWin32KHR;
 import org.lwjgl.openxr.XrGraphicsBindingOpenGLXlibKHR;
-import org.lwjgl.openxr.XrGraphicsRequirementsOpenGLESKHR;
 import org.lwjgl.openxr.XrGraphicsRequirementsOpenGLKHR;
 import org.lwjgl.openxr.XrInstance;
-import org.lwjgl.openxr.XrInstanceCreateInfoAndroidKHR;
-import org.lwjgl.openxr.XrLoaderInitInfoAndroidKHR;
-import org.lwjgl.openxr.XrLoaderInitInfoBaseHeaderKHR;
 import org.lwjgl.openxr.XrSwapchainImageOpenGLKHR;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWNativeGLX;
@@ -19,14 +14,12 @@ import org.lwjgl.glfw.GLFWNativeX11;
 import org.lwjgl.opengl.GLX;
 import org.lwjgl.opengl.GLX12;
 import org.lwjgl.opengl.WGL;
-import org.lwjgl.openxr.KHRAndroidCreateInstance;
 import org.lwjgl.openxr.KHRLoaderInit;
-import org.lwjgl.openxr.KHRLoaderInitAndroid;
 import org.lwjgl.openxr.KHROpenGLEnable;
-import org.lwjgl.openxr.KHROpenGLESEnable;
+import org.lwjgl.openxr.XR10;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.Platform;
-import org.lwjgl.system.Struct;
+import org.lwjgl.system.JNI;
 import org.lwjgl.system.linux.X11;
 import org.lwjgl.system.windows.User32;
 
@@ -40,12 +33,18 @@ import static org.lwjgl.opengl.GLX13.glXQueryContext;
 import static org.lwjgl.opengl.GLX13.glXQueryDrawable;
 import static org.lwjgl.system.MemoryStack.stackInts;
 import static org.lwjgl.system.MemoryUtil.NULL;
+import static org.lwjgl.system.MemoryUtil.memPutAddress;
+import static org.lwjgl.system.MemoryUtil.memPutInt;
+import static org.lwjgl.system.Pointer.POINTER_SIZE;
 
 public interface XRPlatform {
     void initializeLoader(MemoryStack stack);
     long getInstanceCreateInfo(MemoryStack stack);
     String getGraphicsExtension();
-    Struct<?> createGraphicsBinding(MemoryStack stack, XrInstance instance, long systemId, long windowHandle);
+    /**
+     * @return address of the XrGraphicsBinding* struct to chain into XrSessionCreateInfo
+     */
+    long createGraphicsBinding(MemoryStack stack, XrInstance instance, long systemId, long windowHandle);
     XrSwapchainImageOpenGLKHR.Buffer createImageBuffers(int imageCount, MemoryStack stack);
 
     static XRPlatform get() {
@@ -84,7 +83,7 @@ public interface XRPlatform {
         }
 
         @Override
-        public Struct<?> createGraphicsBinding(MemoryStack stack, XrInstance instance, long systemId, long windowHandle) {
+        public long createGraphicsBinding(MemoryStack stack, XrInstance instance, long systemId, long windowHandle) {
             XrGraphicsRequirementsOpenGLKHR requirements = XrGraphicsRequirementsOpenGLKHR.calloc(stack)
                     .type(KHROpenGLEnable.XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR);
             KHROpenGLEnable.xrGetOpenGLGraphicsRequirementsKHR(instance, systemId, requirements);
@@ -107,7 +106,7 @@ public interface XRPlatform {
                         NULL,
                         deviceContext,
                         glContext
-                );
+                ).address();
             }
 
             if (Platform.get() == Platform.LINUX) {
@@ -147,7 +146,7 @@ public interface XRPlatform {
                         config,
                         drawable,
                         context
-                );
+                ).address();
             }
 
             throw new AtumVRException("MacOS not supported");
@@ -176,7 +175,24 @@ public interface XRPlatform {
         }
     }
 
+    /**
+     * Android (Quest) OpenXR platform: OpenGL ES session via {@link AndroidXRBridge}.
+     * <p>
+     *     Upstream LWJGL does not ship the Android/GLES OpenXR bindings
+     *     (XR_KHR_opengl_es_enable, XR_KHR_android_create_instance, XR_KHR_loader_init_android),
+     *     so their structs are written by hand here. Every one of them is a
+     *     {type, next, pointer...} layout.
+     * </p>
+     */
     class Android implements XRPlatform {
+        public static final String XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME = "XR_KHR_opengl_es_enable";
+
+        public static final int XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR = 1000008000;
+        public static final int XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR = 1000024001;
+        public static final int XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR = 1000024002;
+        public static final int XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR = 1000024003;
+        public static final int XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR = 1000089000;
+
         private final AndroidXRBridge bridge;
 
         Android(AndroidXRBridge bridge) {
@@ -195,38 +211,47 @@ public interface XRPlatform {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException(exception);
             }
-            XrLoaderInitInfoAndroidKHR info = XrLoaderInitInfoAndroidKHR.calloc(stack).set(
-                    KHRLoaderInitAndroid.XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR,
-                    NULL,
+            // XrLoaderInitInfoAndroidKHR
+            long info = typedStruct(stack, XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR,
                     bridge.getDalvikVM(),
                     bridge.getDalvikActivity()
             );
-            KHRLoaderInit.xrInitializeLoaderKHR(XrLoaderInitInfoBaseHeaderKHR.create(info.address()));
+            int result = KHRLoaderInit.nxrInitializeLoaderKHR(info);
+            if (result != XR10.XR_SUCCESS) {
+                throw new AtumVRException("xrInitializeLoaderKHR failed: " + result);
+            }
         }
 
         @Override
         public long getInstanceCreateInfo(MemoryStack stack) {
-            return XrInstanceCreateInfoAndroidKHR.calloc(stack).set(
-                    KHRAndroidCreateInstance.XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR,
-                    NULL,
+            // XrInstanceCreateInfoAndroidKHR
+            return typedStruct(stack, XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR,
                     bridge.getDalvikVM(),
                     bridge.getDalvikActivity()
-            ).address();
+            );
         }
 
         @Override
         public String getGraphicsExtension() {
-            return KHROpenGLESEnable.XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME;
+            return XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME;
         }
 
         @Override
-        public Struct<?> createGraphicsBinding(MemoryStack stack, XrInstance instance, long systemId, long windowHandle) {
-            XrGraphicsRequirementsOpenGLESKHR requirements = XrGraphicsRequirementsOpenGLESKHR.calloc(stack)
-                    .type(KHROpenGLESEnable.XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR);
-            KHROpenGLESEnable.xrGetOpenGLESGraphicsRequirementsKHR(instance, systemId, requirements);
-            return XrGraphicsBindingOpenGLESAndroidKHR.calloc(stack).set(
-                    KHROpenGLESEnable.XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR,
-                    NULL,
+        public long createGraphicsBinding(MemoryStack stack, XrInstance instance, long systemId, long windowHandle) {
+            // XrGraphicsRequirementsOpenGLESKHR {type, next, uint64 min, uint64 max}, must be queried before session creation
+            long requirements = typedStruct(stack, XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR, NULL, NULL);
+            PointerBuffer function = stack.callocPointer(1);
+            int result = XR10.xrGetInstanceProcAddr(instance, stack.ASCII("xrGetOpenGLESGraphicsRequirementsKHR"), function);
+            if (result != XR10.XR_SUCCESS || function.get(0) == NULL) {
+                throw new AtumVRException("xrGetOpenGLESGraphicsRequirementsKHR unavailable: " + result);
+            }
+            result = JNI.callPJPI(instance.address(), systemId, requirements, function.get(0));
+            if (result != XR10.XR_SUCCESS) {
+                throw new AtumVRException("xrGetOpenGLESGraphicsRequirementsKHR failed: " + result);
+            }
+
+            // XrGraphicsBindingOpenGLESAndroidKHR
+            return typedStruct(stack, XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR,
                     bridge.getEGLDisplay(),
                     bridge.getEGLConfig(),
                     bridge.getEGLContext()
@@ -235,11 +260,28 @@ public interface XRPlatform {
 
         @Override
         public XrSwapchainImageOpenGLKHR.Buffer createImageBuffers(int imageCount, MemoryStack stack) {
+            // XrSwapchainImageOpenGLESKHR has the same layout as XrSwapchainImageOpenGLKHR
             XrSwapchainImageOpenGLKHR.Buffer images = XrSwapchainImageOpenGLKHR.calloc(imageCount, stack);
             for (XrSwapchainImageOpenGLKHR image : images) {
-                image.type(KHROpenGLESEnable.XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR);
+                image.type(XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR);
             }
             return images;
+        }
+
+        /**
+         * Allocates a zeroed {XrStructureType type; const void* next; pointer fields...} struct
+         *
+         * @return the struct address
+         */
+        private static long typedStruct(MemoryStack stack, int type, long... fields) {
+            int fieldsOffset = 2 * POINTER_SIZE;
+            long address = stack.ncalloc(8, fieldsOffset + fields.length * 8, 1);
+            memPutInt(address, type);
+            memPutAddress(address + POINTER_SIZE, NULL);
+            for (int i = 0; i < fields.length; i++) {
+                memPutAddress(address + fieldsOffset + (long) i * POINTER_SIZE, fields[i]);
+            }
+            return address;
         }
     }
 }
