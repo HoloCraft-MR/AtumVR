@@ -2,6 +2,7 @@ package me.phoenixra.atumvr.core.input;
 
 import lombok.Getter;
 import me.phoenixra.atumconfig.api.tuples.PairRecord;
+import me.phoenixra.atumvr.api.enums.ControllerType;
 import me.phoenixra.atumvr.api.exceptions.AtumVRException;
 import me.phoenixra.atumvr.api.input.AtumVRInputHandler;
 import me.phoenixra.atumvr.api.input.device.AtumVRDevice;
@@ -18,6 +19,9 @@ import me.phoenixra.atumvr.api.input.treadmill.AtumVRTreadmillView;
 import me.phoenixra.atumvr.core.input.body.XRBody;
 import me.phoenixra.atumvr.core.input.device.XRDevice;
 import me.phoenixra.atumvr.core.input.haptics.XRBodyHapticsProvider;
+import me.phoenixra.atumvr.api.input.device.AtumVRDeviceController;
+import me.phoenixra.atumvr.core.input.device.XRDeviceController;
+import me.phoenixra.atumvr.core.input.hand.XRHandTracking;
 import me.phoenixra.atumvr.core.input.profile.XRInteractionProfile;
 import me.phoenixra.atumvr.core.input.profile.tracker.XRTrackerProvider;
 import me.phoenixra.atumvr.core.input.profile.tracker.hand.XRHandsProvider;
@@ -29,11 +33,15 @@ import org.jetbrains.annotations.Nullable;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.MemoryStack;
 
+import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.*;
 
 import static me.phoenixra.atumvr.api.input.profile.VRInteractionProfileType.*;
 import static me.phoenixra.atumvr.api.input.profile.VRInteractionProfileType.VIVE_COSMOS;
+import static me.phoenixra.atumvr.core.input.action.XRAction.LEFT_HAND_PATH;
+import static me.phoenixra.atumvr.core.input.action.XRAction.RIGHT_HAND_PATH;
 import static org.lwjgl.openxr.XR10.*;
 import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -83,6 +91,12 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
     private boolean bodyHapticsResolved;
 
     private final Map<String, String> lastLoggedInteractionProfile = new HashMap<>();
+    private final Map<ControllerType, String> currentProfilePaths = new EnumMap<>(ControllerType.class);
+
+    /** Tracked hands, used in place of a controller that is not active */
+    @Getter
+    private XRHandTracking handTracking;
+    private final boolean[] handDriven = new boolean[ControllerType.values().length];
 
 
     public XRInputHandler(@NotNull XRProvider vrProvider){
@@ -252,6 +266,9 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
             if(bodyHapticsProvider != null){
                 bodyHapticsProvider.onAttached();
             }
+            //HAND TRACKING (before devices, controllers read it)
+            handTracking = new XRHandTracking(vrProvider);
+            handTracking.init(xrSession, vrProvider.getSession().getSystem().getSystemId());
 
             //LOAD DEVICES
             devices.clear();
@@ -378,7 +395,19 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
             }
         }
 
+        // hands first: the Touch profile and controller devices fall back to them
+        if (handTracking != null) {
+            handTracking.update();
+        }
+        for (ControllerType type : ControllerType.values()) {
+            // last frame's device state (devices update after the actions)
+            handDriven[type.ordinal()] = devices.get(AtumVRDeviceController.getId(type))
+                    instanceof XRDeviceController controller && controller.isHandDriven();
+        }
         for (XRActionSet entry : activeActionSets) {
+            if (entry instanceof OculusTouchXRProfile touch) {
+                touch.applyHands(handTracking, handDriven);
+            }
             entry.update();
         }
         if (bodyTrackingEnabled) {
@@ -429,41 +458,109 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
             }
             if(bindingsSet.isEmpty()) continue;
 
-            // Suggest whole bindings set
-            int result = trySuggestBindings(xrInstance, profileType.getXrPath(), bindingsSet);
-            if (result == XR10.XR_SUCCESS) {
-                continue;
-            }
-            if (result != XR10.XR_ERROR_PATH_UNSUPPORTED) {
-                vrProvider.checkXRError(result, "xrSuggestInteractionProfileBindings", profileType.getXrPath());
-                continue;
-            }
+            suggestBindings(xrInstance, profileType.getXrPath(), bindingsSet);
 
-            //Fallback
-            List<PairRecord<XRAction, String>> supported = new ArrayList<>();
-            for (PairRecord<XRAction, String> binding : bindingsSet) {
-                if (trySuggestBindings(xrInstance, profileType.getXrPath(), List.of(binding)) == XR10.XR_SUCCESS) {
-                    supported.add(binding);
-                } else {
-                    vrProvider.getLogger().logWarn(
-                            "Dropping unsupported binding for " + profileType + ": " + binding.second()
-                    );
-                }
-            }
-
-            if (supported.isEmpty()) {
-                vrProvider.getLogger().logWarn(
-                        "No supported bindings for interaction profile " + profileType
-                                + " (" + profileType.getXrPath() + ") - skipping"
+            // Quest 3/3S: same actions, so OculusTouchXRProfile stays the active profile
+            if (profileType == OCULUS_TOUCH
+                    && vrProvider.getSession().getInstance().isExtensionEnabled(
+                            OculusTouchXRProfile.META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME)) {
+                vrProvider.getLogger().logInfo(
+                        "Suggesting Oculus Touch bindings for " + OculusTouchXRProfile.TOUCH_CONTROLLER_PLUS_PROFILE_PATH
                 );
-                continue;
+                suggestBindings(xrInstance, OculusTouchXRProfile.TOUCH_CONTROLLER_PLUS_PROFILE_PATH, bindingsSet);
             }
+        }
+    }
 
-            // Re-suggest the supported subset
-            vrProvider.checkXRError(
-                    trySuggestBindings(xrInstance, profileType.getXrPath(), supported),
-                    "xrSuggestInteractionProfileBindings", profileType.getXrPath()
+    private void suggestBindings(@NotNull XrInstance xrInstance,
+                                 @NotNull String profilePath,
+                                 @NotNull List<PairRecord<XRAction, String>> bindingsSet) {
+        // Suggest whole bindings set
+        int result = trySuggestBindings(xrInstance, profilePath, bindingsSet);
+        if (result == XR10.XR_SUCCESS) {
+            return;
+        }
+        if (result != XR10.XR_ERROR_PATH_UNSUPPORTED) {
+            vrProvider.checkXRError(result, "xrSuggestInteractionProfileBindings", profilePath);
+            return;
+        }
+
+        //Fallback
+        List<PairRecord<XRAction, String>> supported = new ArrayList<>();
+        for (PairRecord<XRAction, String> binding : bindingsSet) {
+            if (trySuggestBindings(xrInstance, profilePath, List.of(binding)) == XR10.XR_SUCCESS) {
+                supported.add(binding);
+            } else {
+                vrProvider.getLogger().logWarn(
+                        "Dropping unsupported binding for " + profilePath + ": " + binding.second()
+                );
+            }
+        }
+
+        if (supported.isEmpty()) {
+            vrProvider.getLogger().logWarn(
+                    "No supported bindings for interaction profile " + profilePath + " - skipping"
             );
+            return;
+        }
+
+        // Re-suggest the supported subset
+        vrProvider.checkXRError(
+                trySuggestBindings(xrInstance, profilePath, supported),
+                "xrSuggestInteractionProfileBindings", profilePath
+        );
+    }
+
+    /**
+     * Query the runtime for the interaction profile currently bound to each hand.
+     * <p>
+     *     Called on XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED and after init
+     * </p>
+     */
+    public void refreshCurrentInteractionProfiles() {
+        currentProfilePaths.put(ControllerType.LEFT, queryCurrentInteractionProfile(LEFT_HAND_PATH));
+        currentProfilePaths.put(ControllerType.RIGHT, queryCurrentInteractionProfile(RIGHT_HAND_PATH));
+        vrProvider.getLogger().logInfo(
+                "Current interaction profile: left=" + currentProfilePaths.get(ControllerType.LEFT)
+                        + ", right=" + currentProfilePaths.get(ControllerType.RIGHT)
+        );
+    }
+
+    /**
+     * Get the interaction profile path the runtime currently uses for the hand
+     *
+     * @param controllerType the hand
+     * @return the profile path (e.g. /interaction_profiles/oculus/touch_controller)
+     *         or null if none / not known yet
+     */
+    public @Nullable String getCurrentInteractionProfilePath(@NotNull ControllerType controllerType) {
+        return currentProfilePaths.get(controllerType);
+    }
+
+    private @Nullable String queryCurrentInteractionProfile(@NotNull String handPath) {
+        XrSession session = vrProvider.getSession().getHandle();
+        XrInstance instance = vrProvider.getSession().getInstance().getHandle();
+        try (MemoryStack stack = stackPush()) {
+            XrInteractionProfileState state = XrInteractionProfileState.calloc(stack)
+                    .type(XR_TYPE_INTERACTION_PROFILE_STATE);
+            int result = xrGetCurrentInteractionProfile(session, convertStringToXrPath(handPath), state);
+            if (result < 0) {
+                vrProvider.checkXRError(false, result, "xrGetCurrentInteractionProfile", handPath);
+                return null;
+            }
+            long profilePath = state.interactionProfile();
+            if (profilePath == XR_NULL_PATH) {
+                return null;
+            }
+            IntBuffer length = stack.callocInt(1);
+            ByteBuffer buffer = stack.malloc(XR_MAX_PATH_LENGTH);
+            result = xrPathToString(instance, profilePath, length, buffer);
+            if (result < 0 || length.get(0) <= 0) {
+                vrProvider.checkXRError(false, result, "xrPathToString", handPath);
+                return null;
+            }
+            // length includes the null terminator
+            return memUTF8(buffer, length.get(0) - 1);
         }
     }
 
@@ -918,6 +1015,10 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
         bodyHapticsResolved = false;
         vrBody.clearSources();
 
+        if (handTracking != null) {
+            handTracking.destroy();
+            handTracking = null;
+        }
         actionSets.values().forEach(XRActionSet::destroy);
         actionSets.clear();
         appActionSets.clear();
@@ -925,6 +1026,7 @@ public abstract class XRInputHandler implements AtumVRInputHandler {
         devices.clear();
         paths.clear();
         lastLoggedInteractionProfile.clear();
+        currentProfilePaths.clear();
     }
 
     private void destroySafely(@NotNull Object provider, @NotNull Runnable destroy) {

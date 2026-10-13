@@ -2,9 +2,11 @@ package me.phoenixra.atumvr.api;
 
 
 import me.phoenixra.atumvr.api.input.AtumVRInputHandler;
+import me.phoenixra.atumvr.api.mr.TableAnchor;
 import me.phoenixra.atumvr.api.rendering.AtumVRRenderContext;
 import me.phoenixra.atumvr.api.rendering.AtumVRRenderer;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 
 /**
@@ -138,5 +140,52 @@ public interface AtumVRProvider {
     @NotNull
     AtumVRLogger getLogger();
 
+
+    // -------- MIXED REALITY --------
+
+    /**
+     * If the runtime supports passthrough (XR_FB_passthrough)
+     * <p>
+     *     Only valid after {@link #initializeVR()}
+     * </p>
+     *
+     * @return true if passthrough can be enabled
+     */
+    default boolean isPassthroughSupported() {
+        return false;
+    }
+
+    /**
+     * Request passthrough to be enabled/disabled.
+     * <p>
+     *     Applied on the next submitted frame.
+     *     When enabled, the eye textures alpha channel is used to blend
+     *     the app over the passthrough camera feed (alpha 0 = see-through).
+     *     Ignored if passthrough is not supported.
+     * </p>
+     *
+     * @param enabled true to enable
+     */
+    default void setPassthroughEnabled(boolean enabled) {
+    }
+
+    /**
+     * If passthrough was requested and is supported
+     *
+     * @return true/false
+     */
+    default boolean isPassthroughEnabled() {
+        return false;
+    }
+
+    /**
+     * Get the mixed reality table anchor
+     *
+     * @return the table anchor, or null if not supported by this provider
+     */
+    @Nullable
+    default TableAnchor getTableAnchor() {
+        return null;
+    }
 
 }

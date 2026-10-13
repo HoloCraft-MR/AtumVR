@@ -10,6 +10,7 @@ import me.phoenixra.atumvr.api.misc.pose.AtumVRPoseMutable;
 import me.phoenixra.atumvr.core.XRProvider;
 import me.phoenixra.atumvr.core.input.action.types.HapticPulseControllerAction;
 import me.phoenixra.atumvr.core.input.action.types.multi.PoseMultiAction;
+import me.phoenixra.atumvr.core.input.hand.XRHand;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -33,8 +34,27 @@ public class XRDeviceController extends XRDevice implements AtumVRDeviceControll
     @Getter
     private boolean gripActive;
 
+    /**
+     * If the aim / grip pose was located (valid position and orientation)
+     * on the last update. Not located poses are identity,
+     * e.g. a controller that is idle or out of tracking while its action is active
+     */
+    @Getter
+    private boolean poseValid;
+    @Getter
+    private boolean gripPoseValid;
+
     @Getter
     private final AtumVRPoseMutable gripPose = new AtumVRPoseMutable();
+
+    /**
+     * If the poses come from the tracked hand (XR_EXT_hand_tracking aim / palm)
+     * because the controller is not active or located this frame
+     */
+    @Getter
+    private boolean handDriven;
+    /** Pose source for the switch log: controller / hand / none */
+    private String source = "none";
 
 
     private final PoseMultiAction aimAction;
@@ -60,17 +80,36 @@ public class XRDeviceController extends XRDevice implements AtumVRDeviceControll
 
     @Override
     public void update() {
-        var subActionAim = aimAction.getSubActions().get(type.ordinal());
-        var subActionGrip = gripAction.getSubActions().get(type.ordinal());
+        var subActionAim = aimAction.getSubActionsAsPose().get(type.ordinal());
+        var subActionGrip = gripAction.getSubActionsAsPose().get(type.ordinal());
 
         pose.update(subActionAim.getCurrentState());
         active = subActionAim.isActive();
+        poseValid = subActionAim.isLocated();
 
         gripPose.update(subActionGrip.getCurrentState());
         gripActive = subActionGrip.isActive();
+        gripPoseValid = subActionGrip.isLocated();
 
-
-
+        // controller not active / located: the tracked hand drives this device
+        var handTracking = vrProvider.getInputHandler().getHandTracking();
+        XRHand hand = handTracking == null ? null : handTracking.getHand(type);
+        boolean controllerOk = active && poseValid;
+        handDriven = !controllerOk && hand != null && hand.isUsable();
+        if (handDriven) {
+            pose.update(hand.getAimPose().matrix(), hand.getAimPose().orientation(), hand.getAimPose().position());
+            gripPose.update(hand.getGripPose().matrix(), hand.getGripPose().orientation(), hand.getGripPose().position());
+            active = true;
+            gripActive = true;
+            poseValid = true;
+            gripPoseValid = true;
+        }
+        String newSource = controllerOk ? "controller" : handDriven ? "hand" : "none";
+        if (!newSource.equals(source)) {
+            vrProvider.getLogger().logInfo("[MR] Hands: " + (type == ControllerType.LEFT ? "left" : "right")
+                    + " source " + source + " -> " + newSource);
+            source = newSource;
+        }
     }
 
 

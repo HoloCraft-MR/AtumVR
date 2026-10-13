@@ -87,6 +87,8 @@ public class PoseMultiAction extends XRMultiAction<AtumVRPoseRecord> {
                 var loc = XRUtils.xrLocationFromSpace(
                         vrProvider, xrSpace.get(entry), stack
                 );
+                // invalid location: keep the flag for code that must not use such a pose
+                entry.located = loc != null;
 
                 entry.update(
                         entry.writePose(loc == null ? null : loc.pose()),
@@ -110,6 +112,14 @@ public class PoseMultiAction extends XRMultiAction<AtumVRPoseRecord> {
         private final Quaternionf orientation = new Quaternionf();
         private final Vector3f position = new Vector3f();
         private final AtumVRPoseRecord pose = new AtumVRPoseRecord(matrix, orientation, position);
+
+        /**
+         * If the runtime returned a valid position and orientation
+         * for this pose on the last update
+         */
+        @Getter
+        private boolean located;
+
 
         public SubActionPose(@NotNull VRActionIdentifier id,
                              @NotNull String path,

@@ -9,6 +9,8 @@ import me.phoenixra.atumvr.api.input.action.data.VRActionDataVec2;
 import me.phoenixra.atumvr.core.XRProvider;
 import me.phoenixra.atumvr.api.input.profile.VRInteractionProfileType;
 import me.phoenixra.atumvr.core.input.action.XRAction;
+import me.phoenixra.atumvr.core.input.hand.XRHand;
+import me.phoenixra.atumvr.core.input.hand.XRHandTracking;
 import me.phoenixra.atumvr.api.input.profile.VRInteractionProfile;
 import me.phoenixra.atumvr.core.input.action.types.multi.BoolButtonMultiAction;
 import me.phoenixra.atumvr.core.input.action.types.multi.FloatButtonMultiAction;
@@ -29,6 +31,12 @@ import static me.phoenixra.atumvr.core.input.action.XRAction.RIGHT_HAND_PATH;
 public class OculusTouchXRProfile extends XRInteractionProfile {
     private static final VRInteractionProfileType PROFILE = VRInteractionProfileType.OCULUS_TOUCH;
 
+    /**
+     * Quest 3/3S controllers. A superset of Oculus Touch paths,
+     * so the same bindings are suggested for it (when the extension is enabled)
+     */
+    public static final String TOUCH_CONTROLLER_PLUS_PROFILE_PATH = "/interaction_profiles/meta/touch_controller_plus";
+    public static final String META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME = "XR_META_touch_controller_plus";
 
 
     // Single-hand only buttons
@@ -308,6 +316,30 @@ public class OculusTouchXRProfile extends XRInteractionProfile {
                 thumbStick, thumbStickButton, thumbStickTouch,
                 thumbRestTouch
         );
+    }
+
+    /**
+     * Feed tracked hands into the actions (index pinch = trigger, fist = grip,
+     * left menu gesture = Y), only for hands that drive their controller device
+     * (controller not active / located), so controllers always win.
+     * <p>
+     *     Call before the action set update
+     * </p>
+     *
+     * @param handTracking the hand tracking, null or unsupported = no hand input
+     * @param handDriven   per {@link ControllerType#ordinal()}: the controller device was hand driven last frame
+     */
+    public void applyHands(@Nullable XRHandTracking handTracking, boolean @NotNull [] handDriven) {
+        for (ControllerType type : ControllerType.values()) {
+            XRHand hand = handTracking == null || !handTracking.isSupported() ? null : handTracking.getHand(type);
+            boolean usable = hand != null && hand.isUsable() && handDriven[type.ordinal()];
+            triggerValue.getHandSubaction(type).setHandValue(usable ? hand.getTriggerValue() : Float.NaN);
+            gripValue.getHandSubaction(type).setHandValue(usable ? (hand.isFist() ? 1f : 0f) : Float.NaN);
+            if (type == ControllerType.LEFT) {
+                // Meta left-hand menu gesture -> Y (Visor menu for right-handed players)
+                secondaryButton.getHandSubaction(type).setHandValue(usable ? hand.isMenuGesture() : null);
+            }
+        }
     }
 
     @Override

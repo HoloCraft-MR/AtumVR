@@ -66,6 +66,14 @@ public class FloatButtonMultiAction extends XRMultiAction<Float> {
                         "xrGetActionStateFloat"
                 );
                 float v = state.currentState();
+                boolean isActive = state.isActive();
+                boolean changedSinceLastSync = state.changedSinceLastSync();
+                // this hand is driven by hand tracking (controller not active / located)
+                if (!Float.isNaN(entry.handValue)) {
+                    v = entry.handValue;
+                    changedSinceLastSync = v != entry.getCurrentState();
+                    isActive = true;
+                }
                 boolean newButtonState;
                 if (entry.isPressed()) {
                     // once pressed, only go false when drop below the lower threshold
@@ -85,10 +93,10 @@ public class FloatButtonMultiAction extends XRMultiAction<Float> {
 
 
                 entry.update(
-                        state.currentState(),
+                        v,
                         state.lastChangeTime(),
-                        state.changedSinceLastSync(),
-                        state.isActive()
+                        changedSinceLastSync,
+                        isActive
                 );
                 if(entry.buttonChanged){
                     vrProvider.getInputHandler().onActionChanged(
@@ -110,6 +118,18 @@ public class FloatButtonMultiAction extends XRMultiAction<Float> {
         protected boolean pressed;
         protected boolean buttonChanged;
         protected long buttonLastChangeTime;
+        /** Value from a tracked hand, set while the hand drives the controller (NaN = none) */
+        protected float handValue = Float.NaN;
+
+        /**
+         * Hand tracking input for this sub-action, overrides the controller
+         * action state (set only while the hand drives the controller)
+         *
+         * @param value the value, or NaN for none
+         */
+        public void setHandValue(float value) {
+            handValue = value;
+        }
 
         public SubActionFloatButton(@NotNull VRActionIdentifier id,
                                     @NotNull String path,
