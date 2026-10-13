@@ -398,7 +398,7 @@ public class XRSpatialAnchors {
                     .type(FBSpatialEntityQuery.XR_TYPE_SPACE_STORAGE_LOCATION_FILTER_INFO_FB)
                     .location(FBSpatialEntityQuery.XR_SPACE_STORAGE_LOCATION_LOCAL_FB);
             var uuids = XrUuidEXT.calloc(1, stack);
-            putUuid(uuids.get(0), uuid);
+            putUuid(XrUuidEXT.create(uuids.address()), uuid);
             var uuidFilter = XrSpaceUuidFilterInfoFB.calloc(stack)
                     .type(FBSpatialEntityQuery.XR_TYPE_SPACE_UUID_FILTER_INFO_FB)
                     .next(location.address())
