@@ -4,6 +4,7 @@ import lombok.Getter;
 import me.phoenixra.atumvr.api.exceptions.AtumVRException;
 import me.phoenixra.atumvr.core.XRProvider;
 import me.phoenixra.atumvr.core.enums.XRGraphicsApi;
+import me.phoenixra.atumvr.core.session.platform.XRPlatform;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.GL;
@@ -62,6 +63,8 @@ public class XRInstance {
     public void init() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
 
+            XRPlatform.get().initializeLoader(stack);
+
             var extensionsPointer = setupExtensions(
                     vrProvider, stack
             );
@@ -77,7 +80,7 @@ public class XRInstance {
             // 2) Create XrInstanceCreateInfo
             var instInfo = XrInstanceCreateInfo.calloc(stack)
                     .type(XR10.XR_TYPE_INSTANCE_CREATE_INFO)
-                    .next(0)
+                    .next(XRPlatform.get().getInstanceCreateInfo(stack))
                     .applicationInfo(appInfo)
                     .enabledExtensionNames(extensionsPointer)
                     .enabledApiLayerNames(null);
@@ -95,7 +98,7 @@ public class XRInstance {
 
             this.handle = new XrInstance(instancePointer.get(0), instInfo);
 
-            if(handle.getCapabilities().XR_EXT_debug_utils) {
+            if(!XRPlatform.isAndroid() && handle.getCapabilities().XR_EXT_debug_utils) {
                 setupDebugMessenger(vrProvider, stack);
             }
 
@@ -147,11 +150,19 @@ public class XRInstance {
         // 2) Define desired extensions in priority order
         List<String> desiredExtensions = new ArrayList<>(List.of(
                 graphicsApi.getExtensionName(),
-
-                EXTDebugUtils.XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
                 FBDisplayRefreshRate.XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
-                KHRVisibilityMask.XR_KHR_VISIBILITY_MASK_EXTENSION_NAME //@TODO test mask for performance improvements
+                KHRVisibilityMask.XR_KHR_VISIBILITY_MASK_EXTENSION_NAME,
+
+                EXTLocalFloor.XR_EXT_LOCAL_FLOOR_EXTENSION_NAME,
+                EXTPerformanceSettings.XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME,
+                FBColorSpace.XR_FB_COLOR_SPACE_EXTENSION_NAME,
+                FBFoveation.XR_FB_FOVEATION_EXTENSION_NAME,
+                FBFoveationConfiguration.XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME,
+                FBSwapchainUpdateState.XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME
         ));
+        if (!XRPlatform.isAndroid()) {
+            desiredExtensions.add(EXTDebugUtils.XR_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
         desiredExtensions.addAll(vrProvider.getXRAppExtensions());
 
         // Keep only what the runtime offers, preserving priority order and dropping duplicates
@@ -182,6 +193,14 @@ public class XRInstance {
 
 
     private XRGraphicsApi resolveGraphicsApi() {
+        if (XRPlatform.get() instanceof XRPlatform.Android) {
+            // Android sessions bind the EGL context provided by the AndroidXRBridge
+            String extension = XRPlatform.get().getGraphicsExtension();
+            if (!availableExtensions.contains(extension)) {
+                throw new AtumVRException("Missing required graphics extension: " + extension);
+            }
+            return XRGraphicsApi.OPENGL_ES;
+        }
         XRGraphicsApi forced = vrProvider.getGraphicsApiPreference();
         if (forced != null) {
             if (!availableExtensions.contains(forced.getExtensionName())) {
