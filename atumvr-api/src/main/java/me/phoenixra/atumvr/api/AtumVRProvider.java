@@ -188,4 +188,14 @@ public interface AtumVRProvider {
         return null;
     }
 
+    /**
+     * Real tables from the headset's scene model
+     *
+     * @return the scene tables, or null if not supported by this provider
+     */
+    @Nullable
+    default me.phoenixra.atumvr.api.mr.SceneTables getSceneTables() {
+        return null;
+    }
+
 }

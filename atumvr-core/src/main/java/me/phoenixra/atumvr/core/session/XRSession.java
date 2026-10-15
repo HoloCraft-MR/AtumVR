@@ -54,6 +54,9 @@ public class XRSession implements AtumVRSession {
     protected XRSpatialAnchors spatialAnchors;
 
     @Getter
+    protected XRSceneTables sceneTables;
+
+    @Getter
     protected float requestedDisplayRefreshRate = Float.NaN;
 
     @Getter
@@ -73,6 +76,7 @@ public class XRSession implements AtumVRSession {
         swapChain = new XRSwapChain(vrProvider);
         passthrough = new XRPassthrough(vrProvider);
         spatialAnchors = new XRSpatialAnchors(vrProvider);
+        sceneTables = new XRSceneTables(vrProvider);
     }
 
 
@@ -92,6 +96,7 @@ public class XRSession implements AtumVRSession {
         swapChain.init();
         passthrough.init(handle);
         spatialAnchors.init(handle, xrAppSpace);
+        sceneTables.init(handle, xrAppSpace);
     }
 
 
@@ -361,6 +366,10 @@ public class XRSession implements AtumVRSession {
 
         try {
             spatialAnchors.destroy();
+        } catch (Throwable ignored) {}
+
+        try {
+            sceneTables.destroy();
         } catch (Throwable ignored) {}
 
         try {

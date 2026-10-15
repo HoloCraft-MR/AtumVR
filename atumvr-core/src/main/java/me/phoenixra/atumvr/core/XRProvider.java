@@ -289,6 +289,7 @@ public abstract class XRProvider implements AtumVRProvider {
         renderer.prepareFrame();
         inputHandler.update();
         session.getSpatialAnchors().update();
+        session.getSceneTables().update();
     }
 
     @Override
@@ -365,6 +366,13 @@ public abstract class XRProvider implements AtumVRProvider {
     @Override
     public @NotNull TableAnchor getTableAnchor() {
         return tableAnchor;
+    }
+
+    private final me.phoenixra.atumvr.api.mr.SceneTables sceneTables = new me.phoenixra.atumvr.api.mr.SceneTables();
+
+    @Override
+    public @NotNull me.phoenixra.atumvr.api.mr.SceneTables getSceneTables() {
+        return sceneTables;
     }
 
     /**

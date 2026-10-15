@@ -113,6 +113,10 @@ public class XRState implements AtumVRState {
             }
             if (isPaused()) eventsWhilePaused++;
             var event = XrEventDataBaseHeader.create(eventBuffer.address());
+            // before the anchors: they take every space query event
+            if (vrProvider.getSession().getSceneTables().onEvent(event.type(), event.address())) {
+                continue;
+            }
             if (vrProvider.getSession().getSpatialAnchors().onEvent(event.type(), event.address())) {
                 continue;
             }

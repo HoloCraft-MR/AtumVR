@@ -165,6 +165,8 @@ public class XRInstance {
                 FBSpatialEntity.XR_FB_SPATIAL_ENTITY_EXTENSION_NAME,
                 FBSpatialEntityStorage.XR_FB_SPATIAL_ENTITY_STORAGE_EXTENSION_NAME,
                 FBSpatialEntityQuery.XR_FB_SPATIAL_ENTITY_QUERY_EXTENSION_NAME,
+                // real tables from Space Setup (XRSceneTables)
+                FBScene.XR_FB_SCENE_EXTENSION_NAME,
                 // hands without controllers (XRHandTracking)
                 EXTHandTracking.XR_EXT_HAND_TRACKING_EXTENSION_NAME,
                 FBHandTrackingAim.XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME,
